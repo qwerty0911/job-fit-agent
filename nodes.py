@@ -1,11 +1,12 @@
 from state import GraphState
-from state import IntentClassification
+from state import IntentClassification, JobSearchRequest
 from llm import get_llm
 
 llm=get_llm("openai/gpt-5.4")
 augment_llm= get_llm("openai/gpt-5.6-terra")
 
 llm_with_structured_output = llm.with_structured_output(IntentClassification)
+llm_with_structured_output2 = llm.with_structured_output(JobSearchRequest)
 
 async def classify_intent(user_reply: str) -> IntentClassification:
     result = await llm_with_structured_output.ainvoke(
@@ -30,6 +31,29 @@ async def classify_intent(user_reply: str) -> IntentClassification:
 
     return result
 
+async def parse_job_search_request(user_reply: str) -> JobSearchRequest:
+    result = await llm_with_structured_output2.ainvoke(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "너의 목표는 두개야 "
+                    "1. profile기반 검색이 필요한지 keyword기반 검색이 필요한지 검색해줘"
+                    "- 나에게 맞는 공고 찾아줘 -> profile_based"
+                    "- 근무지가 서울인 백엔드 공고 찾아줘 -> keywork_based"
+                    "2. keyword_based라면 role, level, location을 추출해줘"
+                    "- 판교가 근무지인 ai 개발 정규직 공고 찾아줘 -> keyword : ai 개발, location : 판교, job_type : 정규직"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"사용자 요청: {user_reply}",
+            },
+        ]
+    )
+
+    return result
+
 async def route_intent_node(state: GraphState):
     message = state["message"]
     print(f"intent 분류중")
@@ -43,11 +67,27 @@ async def route_intent_node(state: GraphState):
     }
 
 #공고를 검색하는 노드
-async def search_job_node(state: GraphState):
+async def parse_job_search_request_node(state: GraphState):
     print(f"\n 공고 검색중")
+    message = state["message"]
+    result = await parse_job_search_request(message)
 
+    return {
+        "job_search_request": result
+    }
 
-    return {}
+async def keyword_job_search_node(state: GraphState):
+    print(f"\n 키워드 기반 검색")
+
+    return {
+    }
+
+async def profile_job_search_node(state: GraphState):
+    print(f"\n 프로필 기반 검색")
+
+    return {
+    }
+
 
 #프로필을 업데이트 하는 노드
 async def profile_update_node(state: GraphState):
