@@ -71,6 +71,7 @@ async def parse_job_search_request_node(state: GraphState):
     print(f"\n 공고 검색중")
     message = state["message"]
     result = await parse_job_search_request(message)
+    print(result)
 
     return {
         "job_search_request": result

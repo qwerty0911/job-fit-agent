@@ -48,6 +48,6 @@ class GraphState(TypedDict):
 
     profile : dict
     jobs_list : list[dict]
-    job_search_request : Optional[JobSearchRequest]
+    job_search_request : JobSearchRequest
 
-    response: str
+    response : str

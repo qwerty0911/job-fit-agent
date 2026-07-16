@@ -2,3 +2,4 @@ dotenv
 langchain
 langchain-openai
 uvicorn
+pymongo>=4.11
