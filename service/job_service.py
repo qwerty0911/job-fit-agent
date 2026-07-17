@@ -1,4 +1,5 @@
 from database import get_database
+from bson import ObjectId
 from schema import JobSearchCondition, JobPosting
 import re
 from uuid import UUID
@@ -52,3 +53,52 @@ async def insert_recommand_postings_to_user(
         return None
 
     return posting_ids
+
+
+async def get_recommanded_postings(
+    user_uuid: UUID | str,
+) -> list[JobPosting] | None:
+    db = get_database()
+
+    user = await db.users.find_one(
+        {"_id": str(user_uuid)},
+        {"recommanded_postings": 1},
+    )
+
+    if user is None:
+        return None
+
+    posting_ids = [
+        str(posting_id)
+        for posting_id in user.get("recommanded_postings", [])
+    ]
+
+    if not posting_ids:
+        return []
+
+    # Support both ObjectId and string _id values in job_postings.
+    mongo_ids: list[ObjectId | str] = list(posting_ids)
+    mongo_ids.extend(
+        ObjectId(posting_id)
+        for posting_id in posting_ids
+        if ObjectId.is_valid(posting_id)
+    )
+
+    documents = await db.job_postings.find(
+        {"_id": {"$in": mongo_ids}}
+    ).to_list(length=len(posting_ids))
+
+    postings_by_id = {
+        str(document["_id"]): JobPosting.model_validate({
+            **document,
+            "_id": str(document["_id"]),
+        })
+        for document in documents
+    }
+
+    # MongoDB $in does not preserve order, so restore the user's saved order.
+    return [
+        postings_by_id[posting_id]
+        for posting_id in posting_ids
+        if posting_id in postings_by_id
+    ]

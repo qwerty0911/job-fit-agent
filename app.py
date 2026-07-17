@@ -10,6 +10,7 @@ from database import close_mongodb_connection, connect_to_mongodb, get_database
 from graph import graph
 from schema import *
 from service.profile import get_profile, add_profile_skills_service, add_profile_coverletter_service
+from service.job_service import get_recommanded_postings
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -99,6 +100,19 @@ async def create_profile_document_endpoint(request: ProfileDocumentCreate):
         "document_id": document_id,
         "embedding_status": "pending",
     }
+
+@app.get(
+    "/postings/{user_uuid}",
+    response_model=list[JobPosting],
+    response_model_by_alias=False,
+)
+async def get_recommended_postings_endpoint(user_uuid: UUID):
+    postings = await get_recommanded_postings(user_uuid)
+
+    if postings is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return postings
 
 
 @app.post("/login")
