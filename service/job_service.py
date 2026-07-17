@@ -39,7 +39,13 @@ async def insert_recommand_postings_to_user(
 
     result = await db.users.update_one(
         {"_id": str(user_uuid)},
-        {"$set": {"recommanded_postings": posting_ids}},
+        {
+            "$addToSet": {
+                "recommanded_postings": {
+                    "$each": posting_ids,
+                }
+            }
+        },
     )
 
     if result.matched_count == 0:

@@ -70,7 +70,7 @@ async def route_intent_node(state: GraphState):
     }
 
 async def parse_job_search_request_node(state: GraphState):
-    print(f"\n 공고 검색중")
+    print(f"\n 공고검색 : 키워드 추출중")
     message = state["message"]
     result = await parse_job_search_request(message)
     print(result)
