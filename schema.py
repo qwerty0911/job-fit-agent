@@ -1,8 +1,9 @@
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 
 class ChatRequest(BaseModel):
+    user_uuid : UUID
     message: str
 
 class ProfileDocumentCreate(BaseModel):
@@ -26,3 +27,27 @@ class ProfileResponse(BaseModel):
 class ProfileSkillsInsert(BaseModel):
     user_uuid: UUID
     skill: str
+
+class ProfileCoverletterInsert(BaseModel):
+    user_uuid: UUID
+    title: str
+    content: str
+
+class JobSearchCondition(BaseModel):
+    keyword: str = ""
+    location: str | None = None
+    job_type: str | None = None
+
+class JobPosting(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(alias="_id")
+    company_name: str
+    job_title: str
+    job_title_normalized: str
+    tech_stack: list[str]
+    qualifications : list[str]
+    preferred_qualifications : list[str]
+    location : str
+    experience : str
+    posting_url : str

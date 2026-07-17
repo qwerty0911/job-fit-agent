@@ -42,6 +42,7 @@ class JobSearchRequest(BaseModel):
 
 
 class GraphState(TypedDict):
+    user_uuid: str
     message: str
     
     intent: str

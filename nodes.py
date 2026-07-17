@@ -1,5 +1,8 @@
 from state import GraphState
 from state import IntentClassification, JobSearchRequest
+from schema import JobSearchCondition
+from service.job_service import insert_recommand_postings_to_user, search_jobs
+
 from llm import get_llm
 
 llm=get_llm("openai/gpt-5.4")
@@ -66,7 +69,6 @@ async def route_intent_node(state: GraphState):
         # "reason": result.reason,
     }
 
-#공고를 검색하는 노드
 async def parse_job_search_request_node(state: GraphState):
     print(f"\n 공고 검색중")
     message = state["message"]
@@ -80,8 +82,19 @@ async def parse_job_search_request_node(state: GraphState):
 async def keyword_job_search_node(state: GraphState):
     print(f"\n 키워드 기반 검색")
 
-    return {
-    }
+    request = state["job_search_request"]
+
+    condition = JobSearchCondition(
+        keyword=request.keyword,
+        location=request.location,
+        job_type=request.job_type,
+    )
+    jobs = await search_jobs(condition)
+    await insert_recommand_postings_to_user(state["user_uuid"], jobs)
+
+    print(jobs)
+
+    return {"jobs_list": jobs}
 
 async def profile_job_search_node(state: GraphState):
     print(f"\n 프로필 기반 검색")

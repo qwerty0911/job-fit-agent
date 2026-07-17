@@ -9,7 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from database import close_mongodb_connection, connect_to_mongodb, get_database
 from graph import graph
 from schema import *
-from service.profile import get_profile, add_profile_skills_service
+from service.profile import get_profile, add_profile_skills_service, add_profile_coverletter_service
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -58,7 +58,8 @@ async def health():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     result = await graph.ainvoke({
-        "message": request.message
+        "user_uuid": str(request.user_uuid),
+        "message": request.message,
     })
 
     return {"response": result["response"]}
@@ -81,6 +82,14 @@ async def insert_profile_skills(request: ProfileSkillsInsert):
 
     return result
 
+@app.post("/profile/add_coverletter", response_model=ProfileResponse)
+async def insert_profile_coverletter(request: ProfileCoverletterInsert):
+    result = await add_profile_coverletter_service(request)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return result
 
 @app.post("/profile/documents")
 async def create_profile_document_endpoint(request: ProfileDocumentCreate):
