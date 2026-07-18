@@ -9,7 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from database import close_mongodb_connection, connect_to_mongodb, get_database
 from graph import graph
 from schema import *
-from service.profile import get_profile, add_profile_skills_service, add_profile_coverletter_service
+from service.profile import get_profile, add_profile_skills_service
 from service.job_service import get_recommanded_postings
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,22 +83,13 @@ async def insert_profile_skills(request: ProfileSkillsInsert):
 
     return result
 
-@app.post("/profile/add_coverletter", response_model=ProfileResponse)
-async def insert_profile_coverletter(request: ProfileCoverletterInsert):
-    result = await add_profile_coverletter_service(request)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    return result
-
 @app.post("/profile/documents")
 async def create_profile_document_endpoint(request: ProfileDocumentCreate):
     document_id = await create_profile_document_service(request)
 
     return {
         "document_id": document_id,
-        "embedding_status": "pending",
+        "embedding_status": "indexed",
     }
 
 @app.get(

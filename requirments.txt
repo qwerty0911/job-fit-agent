@@ -3,3 +3,5 @@ langchain
 langchain-openai
 uvicorn
 pymongo>=4.11
+pinecone
+langchain-text-splitters

@@ -3,17 +3,21 @@ from datetime import UTC, datetime
 from bson import ObjectId
 
 from database import get_database
-# from service.embedding_service import create_embeddings, split_text
-# from service.vector_store import VectorStore
+from service.embedding_service import (
+    create_embeddings,
+    create_query_embedding,
+    split_text,
+)
+from service.vector_store import save_chunks, search_user_documents
 
 
 async def save_document_to_mongodb(request) -> ObjectId:
     db = get_database()
 
     document = {
-        "_id": str(request.user_uuid),
-        "document_type": "cover_letter",
-        "title" : request.title,
+        "user_uuid": str(request.user_uuid),
+        "document_type": "resume",
+        "title": request.title,
         "content": request.content,
         "vector_store": {
             "provider": "pinecone",
@@ -28,43 +32,68 @@ async def save_document_to_mongodb(request) -> ObjectId:
 
 
 async def create_profile_document(request):
-    # mongodb에 원문 저장
     mongo_document_id = await save_document_to_mongodb(request)
+    document_id = str(mongo_document_id)
+    user_uuid = str(request.user_uuid)
+    version = 1
+    db = get_database()
 
-    # # vectorstore에 임베딩
-    # document_id = str(mongo_document_id)
-    # user_uuid = str(request.user_uuid)
-    # version = 1
+    try:
+        chunks = split_text(request.content)
+        embeddings = await create_embeddings(chunks)
 
-    # chunks = split_text(request.content)
-    # embeddings = await create_embeddings(chunks)
+        await save_chunks(
+            user_uuid=user_uuid,
+            document_id=document_id,
+            document_type="resume",
+            title=request.title,
+            version=version,
+            chunks=chunks,
+            embeddings=embeddings,
+        )
+    except Exception as exc:
+        await db.profile_documents.update_one(
+            {"_id": mongo_document_id},
+            {
+                "$set": {
+                    "vector_store.status": "failed",
+                    "vector_store.error": str(exc),
+                }
+            },
+        )
+        raise
 
-    # await VectorStore.save_chunks(
-    #     user_uuid=user_uuid,
-    #     document_id=document_id,
-    #     version=version,
-    #     chunks=chunks,
-    #     embeddings=embeddings,
-    # )
+    await db.profile_documents.update_one(
+        {"_id": mongo_document_id},
+        {
+            "$set": {
+                "vector_store": {
+                    "provider": "pinecone",
+                    "namespace": f"user-{user_uuid}",
+                    "id_prefix": f"{document_id}:v{version}",
+                    "version": version,
+                    "chunk_count": len(chunks),
+                    "status": "indexed",
+                }
+            }
+        },
+    )
 
-    # # vectorstore 임베딩 후 mongodb 업데이트
-    # db = get_database()
+    return document_id
 
-    # await db.profile_documents.update_one(
-    #     {"_id": mongo_document_id},
-    #     {
-    #         "$set": {
-    #             "vector_store": {
-    #                 "provider": "pinecone",
-    #                 "namespace": f"user-{user_uuid}",
-    #                 "id_prefix": f"{document_id}:v{version}",
-    #                 "version": version,
-    #                 "chunk_count": len(chunks),
-    #                 "status": "indexed",
-    #             }
-    #         }
-    #     },
-    # )
 
-    # ObjectId는 JSON으로 반환할 수 없으므로 API 경계에서 문자열로 변환한다.
-    return str(mongo_document_id)
+async def search_profile_documents(
+    *,
+    user_uuid: str,
+    query: str,
+    top_k: int = 5,
+    document_type: str | None = None,
+) -> list[dict]:
+    query_embedding = await create_query_embedding(query)
+
+    return await search_user_documents(
+        user_uuid=user_uuid,
+        query_embedding=query_embedding,
+        top_k=top_k,
+        document_type=document_type,
+    )

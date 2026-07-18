@@ -48,31 +48,3 @@ async def add_profile_skills_service(
         cover_letters=user.get("cover_letters", []),
     )
 
-
-async def add_profile_coverletter_service(
-    request: ProfileCoverletterInsert,
-) -> ProfileResponse | None:
-    db = get_database()
-
-    user = await db.users.find_one_and_update(
-        {"_id": str(request.user_uuid)},
-        {
-            "$push": {
-                "cover_letters": {
-                    "title": request.title,
-                    "content": request.content,
-                }
-            }
-        },
-        return_document=ReturnDocument.AFTER,
-    )
-
-    if user is None:
-        return None
-
-    return ProfileResponse(
-        user_uuid=user["_id"],
-        name=user.get("name", user.get("user_id", "")),
-        skills=user.get("skills", []),
-        cover_letters=user.get("cover_letters", []),
-    )

@@ -1,5 +1,6 @@
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
 from uuid import UUID
 
 class ChatRequest(BaseModel):
