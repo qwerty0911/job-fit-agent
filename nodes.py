@@ -26,27 +26,27 @@ async def classify_intent(message: str) -> IntentClassification:
             {
                 "role": "system",
                 "content": """
-사용자의 요청을 분석해 intent와 필요한 조건을 한 번에 추출한다.
+                            사용자의 요청을 분석해 intent와 필요한 조건을 한 번에 추출한다.
 
-intent:
-- search_job: 키워드 기반 채용공고 검색
-- matching_score: 특정 회사·직무 지원 적합도 분석
-- others: 위 두 요청에 해당하지 않음
+                            intent:
+                            - search_job: 키워드 기반 채용공고 검색
+                            - matching_score: 특정 회사·직무 지원 적합도 분석
+                            - others: 위 두 요청에 해당하지 않음
 
-추출 규칙:
-- search_job이면 keyword, job_title, location, job_type을 추출한다.
-- matching_score이면 company_name과 job_title을 추출한다.
-- 메시지에 없는 값은 null로 반환한다.
-- 회사명과 직무명을 임의로 추측하거나 변경하지 않는다.
+                            추출 규칙:
+                            - search_job이면 keyword, job_title, location, job_type을 추출한다.
+                            - matching_score이면 company_name과 job_title을 추출한다.
+                            - 메시지에 없는 값은 null로 반환한다.
+                            - 회사명과 직무명을 임의로 추측하거나 변경하지 않는다.
 
-예시:
-- "서울 Python 백엔드 공고 찾아줘"
-  → intent=search_job, keyword="Python 백엔드",
-    job_title="백엔드 개발자", location="서울"
-- "테크웨이브 백엔드 공고에 지원할 만할까?"
-  → intent=matching_score, company_name="테크웨이브",
-    job_title="백엔드"
-""",
+                            예시:
+                            - "서울 Python 백엔드 공고 찾아줘"
+                            → intent=search_job, keyword="Python 백엔드",
+                                job_title="백엔드 개발자", location="서울"
+                            - "테크웨이브 백엔드 공고에 지원할 만할까?"
+                            → intent=matching_score, company_name="테크웨이브",
+                                job_title="백엔드"
+                            """,
             },
             {
                 "role": "user",
