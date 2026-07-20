@@ -38,3 +38,12 @@ async def create_embeddings(chunks: list[str]) -> list[list[float]]:
 
 async def create_query_embedding(query: str) -> list[float]:
     return await embeddings_model.aembed_query(query)
+
+
+async def create_query_embeddings(
+    queries: list[str],
+) -> list[list[float]]:
+    if not queries:
+        return []
+
+    return await embeddings_model.aembed_documents(queries)

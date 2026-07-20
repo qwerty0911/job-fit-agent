@@ -1,54 +1,59 @@
-from typing import TypedDict,Literal, Optional
+from typing import Literal, TypedDict
+
 from pydantic import BaseModel, Field
 
 
-
-
 class IntentClassification(BaseModel):
-    intent: Literal["search_job", "profile_update", "matching_score", "others"] = Field(
+    intent: Literal["search_job", "matching_score", "others"] = Field(
         ...,
-        description="사용자 요청의 의도"
+        description="사용자 요청의 의도",
     )
-
+    company_name: str | None = None
+    job_title: str | None = None
+    keyword: str | None = None
+    location: str | None = None
+    job_type: str | None = None
     confidence: float = Field(
         description="의도 분류 신뢰도. 0~1",
         ge=0,
         le=1,
     )
-
     reason: str = Field(description="의도 분류 이유")
 
-class JobSearchRequest(BaseModel):
-    mode: Literal["keyword_based", "profile_based"] = Field(
-        ...,
-        description="검색 방법. 사용자 입력 키워드 기반이면 keyword_based, 프로필 기반 추천이면 profile_based"
-    )
-    keyword: str = Field(
-        default="",
-        description="검색에 사용할 자연어 키워드. 예: 백엔드 신입 Python"
-    )
-    job_cd: Optional[str] = Field(
-        default=None,
-        description="사람인 직무 코드. 모르면 None"
-    )
-    job_type: Optional[str] = Field(
-        default=None,
-        description="사람인 근무형태/고용형태 코드. 모르면 None"
-    )
-    location: Optional[str] = Field(
-        default=None,
-        description="지역명 또는 지역 코드. 예: 서울"
-    )
+
+class RequirementAssessment(BaseModel):
+    requirement: str
+    status: Literal[
+        "satisfied",
+        "partially_satisfied",
+        "insufficient_evidence",
+    ]
+    reason: str
+    evidence: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
 
 
-class GraphState(TypedDict):
+class JobMatchAssessment(BaseModel):
+    company_name: str
+    job_title: str
+    overall_score: int = Field(ge=0, le=100)
+    requirements: list[RequirementAssessment]
+    strengths: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    recommendation: str
+
+
+class GraphState(TypedDict, total=False):
     user_uuid: str
     message: str
-    
+
     intent: str
+    company_name: str | None
+    job_title: str | None
+    keyword: str | None
+    location: str | None
+    job_type: str | None
 
-    profile : dict
-    jobs_list : list[dict]
-    job_search_request : JobSearchRequest
-
-    response : str
+    jobs_list: list[dict]
+    match_assessment: dict
+    response: str

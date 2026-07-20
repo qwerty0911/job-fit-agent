@@ -1,8 +1,130 @@
 from database import get_database
 from bson import ObjectId
-from schema import JobSearchCondition, JobPosting
+from schema import JobQualificationPosting, JobSearchCondition, JobPosting
 import re
 from uuid import UUID
+
+
+def normalize_company_name(company_name: str) -> str:
+    return re.sub(r"\s+", "", company_name).casefold()
+
+
+async def find_job_postings_by_company_name(
+    company_name: str,
+    limit: int = 10,
+) -> list[JobPosting]:
+    normalized_name = normalize_company_name(company_name)
+
+    if not normalized_name:
+        raise ValueError("회사명은 비어 있을 수 없습니다.")
+
+    # Allow whitespace differences while escaping regex metacharacters from
+    # user input. The regex is intentionally unanchored for partial matching.
+    company_pattern = r"\s*".join(
+        re.escape(character)
+        for character in normalized_name
+    )
+
+    db = get_database()
+    documents = await db.job_postings.find(
+        {
+            "company_name": {
+                "$regex": company_pattern,
+                "$options": "i",
+            }
+        }
+    ).limit(limit).to_list(length=limit)
+
+    postings = [
+        JobPosting.model_validate({
+            **document,
+            "_id": str(document["_id"]),
+        })
+        for document in documents
+    ]
+
+    # Put an exact normalized company-name match before partial matches.
+    postings.sort(
+        key=lambda posting: (
+            normalize_company_name(posting.company_name) != normalized_name,
+            posting.company_name,
+            posting.job_title,
+        )
+    )
+
+    return postings
+
+
+async def find_job_qualifications_by_company_name(
+    company_name: str,
+    job_title: str | None = None,
+    limit: int = 10,
+) -> list[JobQualificationPosting]:
+    normalized_name = normalize_company_name(company_name)
+
+    if not normalized_name:
+        raise ValueError("회사명은 비어 있을 수 없습니다.")
+
+    if limit < 1:
+        raise ValueError("limit은 1 이상이어야 합니다.")
+
+    company_pattern = r"\s*".join(
+        re.escape(character)
+        for character in normalized_name
+    )
+    query: dict = {
+        "company_name": {
+            "$regex": company_pattern,
+            "$options": "i",
+        }
+    }
+
+    normalized_job_title = ""
+    if job_title:
+        normalized_job_title = re.sub(r"\s+", "", job_title).casefold()
+        title_pattern = r"\s*".join(
+            re.escape(character)
+            for character in normalized_job_title
+        )
+        query["job_title"] = {
+            "$regex": title_pattern,
+            "$options": "i",
+        }
+
+    db = get_database()
+    documents = await db.job_postings.find(
+        query,
+        {
+            "company_name": 1,
+            "job_title": 1,
+            "qualifications": 1,
+        },
+    ).limit(limit).to_list(length=limit)
+
+    postings = [
+        JobQualificationPosting.model_validate({
+            **document,
+            "_id": str(document["_id"]),
+        })
+        for document in documents
+    ]
+
+    postings.sort(
+        key=lambda posting: (
+            normalize_company_name(posting.company_name) != normalized_name,
+            (
+                re.sub(r"\s+", "", posting.job_title).casefold()
+                != normalized_job_title
+                if normalized_job_title
+                else False
+            ),
+            posting.company_name,
+            posting.job_title,
+        )
+    )
+
+    return postings
+
 
 async def search_jobs(condition:JobSearchCondition) -> list[JobPosting]:
     db = get_database()

@@ -41,6 +41,7 @@ app.add_middleware(
 )
 from service.document_service import (
     create_profile_document as create_profile_document_service,
+    search_profile_documents_batch,
 )
 
 
@@ -91,6 +92,21 @@ async def create_profile_document_endpoint(request: ProfileDocumentCreate):
         "document_id": document_id,
         "embedding_status": "indexed",
     }
+
+@app.post(
+    "/profile/documents/search",
+    response_model=list[VectorSearchQueryResult],
+)
+async def search_profile_documents_endpoint(
+    request: ProfileDocumentSearch,
+):
+    return await search_profile_documents_batch(
+        user_uuid=str(request.user_uuid),
+        queries=request.queries,
+        top_k=request.top_k,
+        min_score=request.min_score,
+        document_type=request.document_type,
+    )
 
 @app.get(
     "/postings/{user_uuid}",

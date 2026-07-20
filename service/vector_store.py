@@ -80,6 +80,7 @@ async def search_user_documents(
     user_uuid: str,
     query_embedding: list[float],
     top_k: int = 5,
+    min_score: float = 0.7,
     document_type: str | None = None,
 ) -> list[dict[str, Any]]:
     if top_k < 1:
@@ -110,7 +111,7 @@ async def search_user_documents(
     if matches is None and isinstance(result, dict):
         matches = result.get("matches", [])
 
-    return [
+    search_results = [
         {
             "id": match["id"] if isinstance(match, dict) else match.id,
             "score": (
@@ -123,4 +124,10 @@ async def search_user_documents(
             ),
         }
         for match in (matches or [])
+    ]
+
+    return [
+        result
+        for result in search_results
+        if result["score"] >= min_score
     ]

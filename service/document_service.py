@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 from bson import ObjectId
@@ -6,6 +7,7 @@ from database import get_database
 from service.embedding_service import (
     create_embeddings,
     create_query_embedding,
+    create_query_embeddings,
     split_text,
 )
 from service.vector_store import save_chunks, search_user_documents
@@ -87,6 +89,7 @@ async def search_profile_documents(
     user_uuid: str,
     query: str,
     top_k: int = 5,
+    min_score: float = 0.7,
     document_type: str | None = None,
 ) -> list[dict]:
     query_embedding = await create_query_embedding(query)
@@ -95,5 +98,42 @@ async def search_profile_documents(
         user_uuid=user_uuid,
         query_embedding=query_embedding,
         top_k=top_k,
+        min_score=min_score,
         document_type=document_type,
     )
+
+
+async def search_profile_documents_batch(
+    *,
+    user_uuid: str,
+    queries: list[str],
+    top_k: int = 5,
+    min_score: float = 0.7,
+    document_type: str | None = None,
+) -> list[dict]:
+    query_embeddings = await create_query_embeddings(queries)
+
+    matches_by_query = await asyncio.gather(
+        *[
+            search_user_documents(
+                user_uuid=user_uuid,
+                query_embedding=query_embedding,
+                top_k=top_k,
+                min_score=min_score,
+                document_type=document_type,
+            )
+            for query_embedding in query_embeddings
+        ]
+    )
+
+    return [
+        {
+            "query": query,
+            "matches": matches,
+        }
+        for query, matches in zip(
+            queries,
+            matches_by_query,
+            strict=True,
+        )
+    ]
