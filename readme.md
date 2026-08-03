@@ -71,6 +71,17 @@ flowchart TD
 
 현재는 하나의 LangGraph 상태를 여러 전문 노드가 순서대로 처리하는 구조입니다.
 
+각 `/chat` 실행은 `user_uuid`를 LangGraph `thread_id`로 사용하며,
+MongoDB의 `langgraph_checkpoints`와 `langgraph_checkpoint_writes` 컬렉션에
+체크포인트가 저장됩니다. 현재 상태에는 누적 메시지 목록을 두지 않으므로
+대화 이력을 이용한 후속 질문은 지원하지 않습니다. 사용자 메시지는 실행
+컨텍스트로만 전달되며 체크포인트 상태에는 저장되지 않습니다.
+
+공고 검색 결과의 ID 순서는 `recent_posting_ids`에 저장됩니다. 따라서 같은
+사용자가 이어서 "첫 번째 공고 어떤 것 같아?", "2번 공고 분석해줘"처럼
+질문하면 해당 공고 ID를 정확히 선택해 지원 적합도 분석을 실행할 수 있습니다.
+새로운 검색을 실행하면 최근 공고 ID 목록도 새로운 검색 결과로 교체됩니다.
+
 - `route_intent_node`: 의도와 검색 조건을 한 번에 추출
 - `job_search_node`: 키워드 기반 채용 공고 검색
 - `matching_score_node`: 공고 자격요건과 이력서 근거 비교

@@ -1,23 +1,63 @@
 import json
+import re
 
 from llm import get_llm
+from langgraph.runtime import Runtime
 from schema import JobSearchCondition
 from service.document_service import search_profile_documents_batch
 from service.job_service import (
+    find_job_qualification_by_id,
     find_job_qualifications_by_company_name,
     insert_recommand_postings_to_user,
     search_jobs,
 )
-from state import GraphState, IntentClassification, JobMatchAssessment
+from state import (
+    GraphContext,
+    GraphState,
+    IntentClassification,
+    JobMatchAssessment,
+)
 
 
 llm = get_llm("gpt-4o-mini")
-augment_llm = get_llm("gpt-4o-mini")
+augment_llm = get_llm("gpt-5.6-terra")
 
 route_llm = llm.with_structured_output(IntentClassification)
 job_match_assessment_llm = augment_llm.with_structured_output(
     JobMatchAssessment
 )
+
+
+KOREAN_POSTING_ORDINALS = {
+    "첫": 0,
+    "첫째": 0,
+    "첫번째": 0,
+    "두번째": 1,
+    "둘째": 1,
+    "세번째": 2,
+    "셋째": 2,
+    "네번째": 3,
+    "넷째": 3,
+    "다섯번째": 4,
+    "다섯째": 4,
+}
+
+
+def parse_posting_index(message: str, posting_count: int) -> int | None:
+    normalized_message = re.sub(r"\s+", "", message)
+
+    if "마지막" in normalized_message:
+        return posting_count - 1
+
+    for expression, index in KOREAN_POSTING_ORDINALS.items():
+        if expression in normalized_message:
+            return index
+
+    numeric_match = re.search(r"(\d+)(?:번|번째)", normalized_message)
+    if numeric_match:
+        return int(numeric_match.group(1)) - 1
+
+    return None
 
 
 async def classify_intent(message: str) -> IntentClassification:
@@ -30,12 +70,18 @@ async def classify_intent(message: str) -> IntentClassification:
 
                             intent:
                             - search_job: 키워드 기반 채용공고 검색
-                            - matching_score: 특정 회사·직무 지원 적합도 분석
+                            - matching_score: 특정 회사·직무 또는 최근 검색 결과의
+                              특정 공고에 대한 지원 적합도 분석
                             - others: 위 두 요청에 해당하지 않음
 
                             추출 규칙:
                             - search_job이면 keyword, job_title, location, job_type을 추출한다.
-                            - matching_score이면 company_name과 job_title을 추출한다.
+                            - matching_score에서 회사·직무가 명시되면 company_name과
+                              job_title을 추출한다.
+                            - "첫 번째 공고", "2번 공고"처럼 최근 결과의 순번을
+                              가리키면 posting_index를 0부터 시작하는 값으로 추출한다.
+                            - "이 공고"처럼 직전에 선택한 공고를 다시 가리키는
+                              분석 요청도 matching_score로 분류한다. 이때는 posting_index를 0으로 반환한다.
                             - 메시지에 없는 값은 null로 반환한다.
                             - 회사명과 직무명을 임의로 추측하거나 변경하지 않는다.
 
@@ -46,6 +92,10 @@ async def classify_intent(message: str) -> IntentClassification:
                             - "테크웨이브 백엔드 공고에 지원할 만할까?"
                             → intent=matching_score, company_name="테크웨이브",
                                 job_title="백엔드"
+                            - "첫 번째 공고 어떤 것 같아?"
+                            → intent=matching_score, posting_index=0
+                            - "이 공고 지원해도 될까?"
+                            → intent=matching_score
                             """,
             },
             {
@@ -56,10 +106,20 @@ async def classify_intent(message: str) -> IntentClassification:
     )
 
 
-async def route_intent_node(state: GraphState):
+async def route_intent_node(
+    state: GraphState,
+    runtime: Runtime[GraphContext],
+):
     print("intent 및 조건 추출 중")
-    result = await classify_intent(state["message"])
+    result = await classify_intent(runtime.context.message)
     print(f"{result}\n")
+
+    posting_index = result.posting_index
+    if result.intent == "matching_score" and posting_index is None:
+        posting_index = parse_posting_index(
+            runtime.context.message,
+            len(state.get("recent_posting_ids", [])),
+        )
 
     return {
         "intent": result.intent,
@@ -68,10 +128,14 @@ async def route_intent_node(state: GraphState):
         "keyword": result.keyword,
         "location": result.location,
         "job_type": result.job_type,
+        "posting_index": posting_index,
     }
 
 
-async def job_search(state: GraphState):
+async def job_search(
+    state: GraphState,
+    runtime: Runtime[GraphContext],
+):
     print("\n키워드 기반 검색")
 
     keyword = state.get("keyword") or state.get("job_title") or ""
@@ -92,12 +156,19 @@ async def job_search(state: GraphState):
 
     if not jobs:
         return {
-            "response": "조건에 맞는 채용 공고를 찾지 못했습니다."
+            "response": "조건에 맞는 채용 공고를 찾지 못했습니다.",
+            "recent_posting_ids": [],
+            "selected_posting_id": None,
         }
 
-    await insert_recommand_postings_to_user(state["user_uuid"], jobs)
+    await insert_recommand_postings_to_user(
+        runtime.context.user_uuid,
+        jobs,
+    )
 
     return {
+        "recent_posting_ids": [job.id for job in jobs],
+        "selected_posting_id": None,
         "jobs_list": [
             job.model_dump(mode="json")
             for job in jobs
@@ -105,37 +176,82 @@ async def job_search(state: GraphState):
     }
 
 
-async def matching_score(state: GraphState):
+async def matching_score(
+    state: GraphState,
+    runtime: Runtime[GraphContext],
+):
     print("\n공고 매칭")
 
     company_name = state.get("company_name")
     job_title = state.get("job_title")
+    posting_index = state.get("posting_index")
+    recent_posting_ids = state.get("recent_posting_ids", [])
+    selected_posting_id = state.get("selected_posting_id")
 
-    if not company_name:
-        return {
-            "response": "지원 적합도를 분석할 회사명을 알려주세요."
-        }
+    posting = None
 
-    postings = await find_job_qualifications_by_company_name(
-        company_name=company_name,
-        job_title=job_title,
-    )
+    if posting_index is not None:
+        if not recent_posting_ids:
+            return {
+                "response": (
+                    "먼저 채용 공고를 검색해주세요. 검색 결과가 있어야 "
+                    "몇 번째 공고인지 확인할 수 있습니다."
+                )
+            }
 
-    # 사용자의 직무 표현이 DB 제목과 다를 수 있으므로 회사명만으로 재검색한다.
-    if not postings and job_title:
+        if posting_index < 0 or posting_index >= len(recent_posting_ids):
+            return {
+                "response": (
+                    f"최근 검색 결과는 {len(recent_posting_ids)}개입니다. "
+                    "그 안에서 공고 번호를 선택해주세요."
+                )
+            }
+
+        selected_posting_id = recent_posting_ids[posting_index]
+        posting = await find_job_qualification_by_id(selected_posting_id)
+
+        if posting is None:
+            return {
+                "response": (
+                    "선택한 채용 공고를 더 이상 찾을 수 없습니다. "
+                    "공고를 다시 검색해주세요."
+                ),
+                "selected_posting_id": None,
+            }
+
+    elif company_name:
         postings = await find_job_qualifications_by_company_name(
             company_name=company_name,
+            job_title=job_title,
         )
 
-    if not postings:
+        # 사용자의 직무 표현이 DB 제목과 다를 수 있으므로 회사명만으로 재검색한다.
+        if not postings and job_title:
+            postings = await find_job_qualifications_by_company_name(
+                company_name=company_name,
+            )
+
+        if not postings:
+            return {
+                "response": (
+                    f"{company_name}의 채용 공고를 찾지 못했습니다. "
+                    "회사 이름을 정확하게 입력해주세요."
+                )
+            }
+
+        posting = postings[0]
+        selected_posting_id = posting.id
+
+    elif selected_posting_id:
+        posting = await find_job_qualification_by_id(selected_posting_id)
+
+    if posting is None:
         return {
             "response": (
-                f"{company_name}의 채용 공고를 찾지 못했습니다. "
-                "회사 이름을 정확하게 입력해주세요."
+                "지원 적합도를 분석할 회사명을 알려주시거나, "
+                "최근 검색 결과에서 공고 번호를 선택해주세요."
             )
         }
-
-    posting = postings[0]
     qualifications = list(dict.fromkeys(
         qualification.strip()
         for qualification in posting.qualifications
@@ -151,7 +267,7 @@ async def matching_score(state: GraphState):
         }
 
     evidence_results = await search_profile_documents_batch(
-        user_uuid=state["user_uuid"],
+        user_uuid=runtime.context.user_uuid,
         queries=qualifications,
         top_k=5,
         min_score=-1.0,
@@ -190,6 +306,7 @@ async def matching_score(state: GraphState):
     )
 
     return {
+        "selected_posting_id": selected_posting_id,
         "jobs_list": [posting.model_dump(mode="json")],
         "match_assessment": assessment.model_dump(mode="json"),
     }
@@ -237,10 +354,10 @@ async def final_node(state: GraphState):
     if jobs:
         job_lines = [
             (
-                f"- {job['company_name']} | {job['job_title']} | "
+                f"{index}. {job['company_name']} | {job['job_title']} | "
                 f"{job['location']}\n  {job['posting_url']}"
             )
-            for job in jobs
+            for index, job in enumerate(jobs, start=1)
         ]
         return {
             "response": (

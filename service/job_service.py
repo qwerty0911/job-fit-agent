@@ -126,6 +126,33 @@ async def find_job_qualifications_by_company_name(
     return postings
 
 
+async def find_job_qualification_by_id(
+    posting_id: str,
+) -> JobQualificationPosting | None:
+    db = get_database()
+
+    mongo_ids: list[ObjectId | str] = [posting_id]
+    if ObjectId.is_valid(posting_id):
+        mongo_ids.append(ObjectId(posting_id))
+
+    document = await db.job_postings.find_one(
+        {"_id": {"$in": mongo_ids}},
+        {
+            "company_name": 1,
+            "job_title": 1,
+            "qualifications": 1,
+        },
+    )
+
+    if document is None:
+        return None
+
+    return JobQualificationPosting.model_validate({
+        **document,
+        "_id": str(document["_id"]),
+    })
+
+
 async def search_jobs(condition:JobSearchCondition) -> list[JobPosting]:
     db = get_database()
 

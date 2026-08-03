@@ -1,4 +1,5 @@
 
+from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 from uuid import UUID
@@ -53,11 +54,20 @@ class CoverLetterResponse(BaseModel):
     title: str
     content: str
 
+class ProfileDocumentResponse(BaseModel):
+    document_id: str
+    document_type: Literal["resume", "cover_letter"]
+    title: str
+    content: str
+    embedding_status: str | None = None
+    created_at: datetime | None = None
+
 class ProfileResponse(BaseModel):
     user_uuid: UUID
     name: str
     skills: list[str] = Field(default_factory=list)
     cover_letters: list[CoverLetterResponse] = Field(default_factory=list)
+    documents: list[ProfileDocumentResponse] = Field(default_factory=list)
 
 class ProfileSkillsInsert(BaseModel):
     user_uuid: UUID

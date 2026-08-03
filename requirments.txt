@@ -1,6 +1,7 @@
 dotenv
 langchain
 langchain-openai
+langgraph-checkpoint-mongodb>=0.4,<0.5
 uvicorn
 pymongo>=4.11
 pinecone

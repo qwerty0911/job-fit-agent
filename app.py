@@ -1,14 +1,19 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import unicodedata
 from uuid import uuid4, UUID
 
 from fastapi import FastAPI, HTTPException
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 
+from config import MONGODB_DB_NAME, MONGODB_URI
 from database import close_mongodb_connection, connect_to_mongodb, get_database
-from graph import graph
+from graph import create_graph
 from schema import *
+from state import GraphContext
 from service.profile import get_profile, add_profile_skills_service
 from service.job_service import get_recommanded_postings
 
@@ -17,10 +22,25 @@ from fastapi.middleware.cors import CORSMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongodb()
+    checkpoint_client = None
 
     try:
+        checkpoint_client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=5_000,
+        )
+        checkpointer = await asyncio.to_thread(
+            MongoDBSaver,
+            client=checkpoint_client,
+            db_name=MONGODB_DB_NAME,
+            checkpoint_collection_name="langgraph_checkpoints",
+            writes_collection_name="langgraph_checkpoint_writes",
+        )
+        app.state.graph = create_graph(checkpointer=checkpointer)
         yield
     finally:
+        if checkpoint_client is not None:
+            checkpoint_client.close()
         await close_mongodb_connection()
 
 
@@ -59,10 +79,21 @@ async def health():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    result = await graph.ainvoke({
-        "user_uuid": str(request.user_uuid),
-        "message": request.message,
-    })
+    user_uuid = str(request.user_uuid)
+    result = await app.state.graph.ainvoke(
+        {
+            # 체크포인트에 남아 있는 직전 실행 결과가 새 응답에 섞이지
+            # 않도록 실행 단위 결과 필드를 초기화한다.
+            "jobs_list": [],
+            "match_assessment": None,
+            "response": None,
+        },
+        config={"configurable": {"thread_id": user_uuid}},
+        context=GraphContext(
+            user_uuid=user_uuid,
+            message=request.message,
+        ),
+    )
 
     return {"response": result["response"]}
 
