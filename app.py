@@ -9,7 +9,7 @@ from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 
-from config import MONGODB_DB_NAME, MONGODB_URI
+from config import CORS_ORIGINS, MONGODB_DB_NAME, MONGODB_URI
 from database import close_mongodb_connection, connect_to_mongodb, get_database
 from graph import create_graph
 from schema import *
@@ -49,12 +49,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

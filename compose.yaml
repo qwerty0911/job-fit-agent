@@ -1,0 +1,22 @@
+services:
+  api:
+    image: ${APP_IMAGE:-mini-pjt-api:local}
+    build:
+      context: .
+    env_file:
+      - .env
+    ports:
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

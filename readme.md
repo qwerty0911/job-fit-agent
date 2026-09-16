@@ -135,7 +135,7 @@ cd mini-pjt
 ```bash
 uv venv --python 3.12
 source .venv/bin/activate
-uv pip install -r requirments.txt
+uv pip install -r requirements.lock
 ```
 
 ### 3. 환경변수 설정
@@ -201,6 +201,10 @@ uvicorn app:app --reload
 
 - API 문서: `http://127.0.0.1:8000/docs`
 - 상태 확인: `http://127.0.0.1:8000/health`
+
+## Docker 실행 및 라즈베리파이 배포 준비
+
+Docker 구성과 환경변수, MongoDB 연결, ARM64 빌드 방법은 [배포 안내](docs/deployment.md)를 참고하세요.
 
 ## API
 
