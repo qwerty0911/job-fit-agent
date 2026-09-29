@@ -1,0 +1,42 @@
+name: Deploy to Raspberry Pi
+
+on:
+  workflow_run:
+    workflows: ["Build and publish Docker image"]
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pi
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/pi_deploy_key
+          chmod 600 ~/.ssh/pi_deploy_key
+          ssh-keyscan -p "${{ secrets.PI_PORT || 22 }}" -H "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy latest image
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/pi_deploy_key -p "${{ secrets.PI_PORT || 22 }}" "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" <<'EOF'
+            set -e
+            cd "${{ secrets.PI_APP_DIR }}"
+            docker compose pull api
+            docker compose up -d --remove-orphans
+            docker compose ps
+          EOF
