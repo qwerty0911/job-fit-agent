@@ -12,6 +12,7 @@ from pymongo.errors import DuplicateKeyError
 from config import CORS_ORIGINS, MONGODB_DB_NAME, MONGODB_URI
 from database import close_mongodb_connection, connect_to_mongodb, get_database
 from graph import create_graph
+from observability import create_langfuse_handler
 from schema import *
 from state import GraphContext
 from service.profile import get_profile, add_profile_skills_service
@@ -75,6 +76,17 @@ async def health():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     user_uuid = str(request.user_uuid)
+    graph_config = {"configurable": {"thread_id": user_uuid}}
+    langfuse_handler = create_langfuse_handler()
+
+    if langfuse_handler is not None:
+        graph_config["callbacks"] = [langfuse_handler]
+        graph_config["metadata"] = {
+            "langfuse_user_id": user_uuid,
+            "langfuse_session_id": user_uuid,
+            "langfuse_tags": ["job-fit-agent"],
+        }
+
     result = await app.state.graph.ainvoke(
         {
             # 체크포인트에 남아 있는 직전 실행 결과가 새 응답에 섞이지
@@ -83,7 +95,7 @@ async def chat(request: ChatRequest):
             "match_assessment": None,
             "response": None,
         },
-        config={"configurable": {"thread_id": user_uuid}},
+        config=graph_config,
         context=GraphContext(
             user_uuid=user_uuid,
             message=request.message,
