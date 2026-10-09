@@ -51,6 +51,15 @@ class LoginRequest(BaseModel):
     user_id : str
     password : str
 
+class LoginRequest(BaseModel):
+    user_id : str
+    password : str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user_uuid: UUID
+
 class SignupRequest(BaseModel):
     user_id: str = Field(min_length=2, max_length=20)
     password: str = Field(min_length=8, max_length=128)

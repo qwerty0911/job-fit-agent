@@ -19,7 +19,13 @@ from service.profile import get_profile, add_profile_skills_service
 from service.job_service import get_recommanded_postings
 
 from fastapi import Depends
-from service.auth import get_current_user, normalize_user_id, hash_password
+from service.auth import (
+    get_current_user,
+    normalize_user_id,
+    hash_password,
+    verify_password,
+    create_access_token,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -164,50 +170,6 @@ async def get_recommended_postings_endpoint(user_uuid: UUID):
     return postings
 
 
-@app.post("/login")
-async def login(request: LoginRequest):
-    db = get_database()
-
-    user_id = request.user_id.strip()
-    if not 2 <= len(user_id) <= 20:
-        raise HTTPException(
-            status_code=422,
-            detail="아이디는 2~20자로 입력해주세요.",
-        )
-
-    user_id_key = normalize_user_id(user_id)
-    new_user_uuid = str(uuid4())
-
-    try:
-        result = await db.users.update_one(
-            {"user_id_key": user_id_key},
-            {
-                "$setOnInsert": {
-                    "_id": new_user_uuid,
-                    "user_id": user_id,
-                    "user_id_key": user_id_key,
-                    "created_at": datetime.now(UTC),
-                }
-            },
-            upsert=True,
-        )
-    except DuplicateKeyError:
-        # 같은 아이디로 동시에 첫 요청이 들어온 경우
-        result = None
-
-    user = await db.users.find_one({"user_id_key": user_id_key})
-    is_new_user = result is not None and result.upserted_id is not None
-
-    return {
-        "user_uuid": user["_id"],
-        "user_id": user["user_id"],
-        "is_new_user": is_new_user,
-        "message": "새 사용자가 생성되었습니다."
-        if is_new_user
-        else "로그인 성공",
-    }
-
-
 @app.post("/signup",
         response_model=SignupResponse,
         status_code=201,)
@@ -242,4 +204,38 @@ async def signup(request: SignupRequest):
         user_uuid=new_user_uuid,
         user_id=user_id,
         message="회원가입이 완료되었습니다.",
+    )
+
+
+@app.post("/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    db = get_database()
+
+    user_id = request.user_id.strip()
+    user_id_key = normalize_user_id(user_id)
+
+    user = await db.users.find_one({
+        "user_id_key": user_id_key
+    })
+
+    if (
+        user is None
+        or not user.get("password_hash")
+        or not verify_password(
+            request.password,
+            user["password_hash"],
+        )
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="아이디 또는 비밀번호가 올바르지 않습니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token = create_access_token(user["_id"])
+
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user_uuid=user["_id"],
     )
