@@ -18,6 +18,9 @@ from state import GraphContext
 from service.profile import get_profile, add_profile_skills_service
 from service.job_service import get_recommanded_postings
 
+from fastapi import Depends
+from service.auth import get_current_user, normalize_user_id, hash_password
+
 from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
@@ -60,17 +63,18 @@ from service.document_service import (
     search_profile_documents_batch,
 )
 
-
-def normalize_user_id(user_id: str) -> str:
-    return unicodedata.normalize("NFKC", user_id).strip().casefold()
-
-
-
 @app.get("/health")
 async def health():
     database = get_database()
     await database.command("ping")
     return {"status": "ok", "mongodb": "connected"}
+
+@app.get("/auth/me")
+async def get_me(current_user=Depends(get_current_user)):
+    return {
+        "user_uuid": current_user["_id"],
+        "user_id": current_user["user_id"],
+    }
 
 
 @app.post("/chat")
@@ -202,3 +206,40 @@ async def login(request: LoginRequest):
         if is_new_user
         else "로그인 성공",
     }
+
+
+@app.post("/signup",
+        response_model=SignupResponse,
+        status_code=201,)
+async def signup(request: SignupRequest):
+    db = get_database()
+    user_id = request.user_id
+    user_id_key = normalize_user_id(user_id)
+    password_hash = hash_password(request.password)
+    new_user_uuid = str(uuid4())
+
+    if not 2 <= len(user_id_key) <= 20:
+        raise HTTPException(
+            status_code=422,
+            detail="아이디는 2~20자로 입력해주세요.",
+        )
+
+    try:
+        await db.users.insert_one({
+            "_id": new_user_uuid,
+            "user_id": user_id,
+            "user_id_key": user_id_key,
+            "password_hash": password_hash,
+            "created_at": datetime.now(UTC),
+        })
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=409,
+            detail="이미 사용 중인 아이디입니다.",
+    )
+
+    return SignupResponse(
+        user_uuid=new_user_uuid,
+        user_id=user_id,
+        message="회원가입이 완료되었습니다.",
+    )

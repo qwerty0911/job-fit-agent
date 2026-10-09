@@ -40,3 +40,14 @@ LANGFUSE_TRACING_ENVIRONMENT = os.getenv(
     "LANGFUSE_TRACING_ENVIRONMENT",
     "development",
 )
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_ISSUER = os.getenv("JWT_ISSUER", "job-fit-agent")
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "job-fit-api")
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+)
+
+if not JWT_SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY가 설정되지 않았습니다.")

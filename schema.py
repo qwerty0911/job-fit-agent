@@ -49,6 +49,16 @@ class VectorSearchQueryResult(BaseModel):
 
 class LoginRequest(BaseModel):
     user_id : str
+    password : str
+
+class SignupRequest(BaseModel):
+    user_id: str = Field(min_length=2, max_length=20)
+    password: str = Field(min_length=8, max_length=128)
+
+class SignupResponse(BaseModel):
+    user_uuid: UUID
+    user_id: str
+    message: str
 
 class CoverLetterResponse(BaseModel):
     title: str
