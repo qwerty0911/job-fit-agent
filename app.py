@@ -84,8 +84,8 @@ async def get_me(current_user=Depends(get_current_user)):
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
-    user_uuid = str(request.user_uuid)
+async def chat(request: ChatRequest,current_user=Depends(get_current_user)):
+    user_uuid = current_user["_id"]
     graph_config = {"configurable": {"thread_id": user_uuid}}
     langfuse_handler = create_langfuse_handler()
 
@@ -114,8 +114,9 @@ async def chat(request: ChatRequest):
 
     return {"response": result["response"]}
 
-@app.get("/profile/{user_uuid}", response_model=ProfileResponse)
-async def get_profile_endpoint(user_uuid: UUID):
+@app.get("/profile/me", response_model=ProfileResponse)
+async def get_profile_endpoint(current_user=Depends(get_current_user)):
+    user_uuid = current_user["_id"]
     result = await get_profile(user_uuid)
 
     if result is None:
@@ -124,8 +125,12 @@ async def get_profile_endpoint(user_uuid: UUID):
     return result
 
 @app.post("/profile/add_skills", response_model=ProfileResponse)
-async def insert_profile_skills(request: ProfileSkillsInsert):
-    result = await add_profile_skills_service(request)
+async def insert_profile_skills(request: ProfileSkillsInsert, current_user=Depends(get_current_user)):
+    user_uuid = current_user["_id"]
+    result = await add_profile_skills_service(
+        user_uuid=user_uuid,
+        skill=request.skill,
+    )
 
     if result is None:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -133,8 +138,9 @@ async def insert_profile_skills(request: ProfileSkillsInsert):
     return result
 
 @app.post("/profile/documents")
-async def create_profile_document_endpoint(request: ProfileDocumentCreate):
-    document_id = await create_profile_document_service(request)
+async def create_profile_document_endpoint(request: ProfileDocumentCreate, current_user=Depends(get_current_user)):
+    user_uuid = current_user["_id"]
+    document_id = await create_profile_document_service(request=request, user_uuid=user_uuid)
 
     return {
         "document_id": document_id,
@@ -146,10 +152,12 @@ async def create_profile_document_endpoint(request: ProfileDocumentCreate):
     response_model=list[VectorSearchQueryResult],
 )
 async def search_profile_documents_endpoint(
-    request: ProfileDocumentSearch,
+    request: ProfileDocumentSearch,current_user=Depends(get_current_user)
 ):
+    user_uuid = current_user["_id"]
+    
     return await search_profile_documents_batch(
-        user_uuid=str(request.user_uuid),
+        user_uuid=user_uuid,
         queries=request.queries,
         top_k=request.top_k,
         min_score=request.min_score,
@@ -157,11 +165,12 @@ async def search_profile_documents_endpoint(
     )
 
 @app.get(
-    "/postings/{user_uuid}",
+    "/postings/me",
     response_model=list[JobPosting],
     response_model_by_alias=False,
 )
-async def get_recommended_postings_endpoint(user_uuid: UUID):
+async def get_recommended_postings_endpoint(current_user=Depends(get_current_user)):
+    user_uuid = current_user["_id"]
     postings = await get_recommanded_postings(user_uuid)
 
     if postings is None:

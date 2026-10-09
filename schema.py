@@ -5,16 +5,13 @@ from typing import Literal
 from uuid import UUID
 
 class ChatRequest(BaseModel):
-    user_uuid : UUID
     message: str
 
 class ProfileDocumentCreate(BaseModel):
-    user_uuid : UUID
     title : str
     content : str
 
 class ProfileDocumentSearch(BaseModel):
-    user_uuid: UUID
     queries: list[str] = Field(min_length=1, max_length=20)
     top_k: int = Field(default=5, ge=1, le=20)
     min_score: float = 0.7
@@ -46,10 +43,6 @@ class VectorSearchResult(BaseModel):
 class VectorSearchQueryResult(BaseModel):
     query: str
     matches: list[VectorSearchResult]
-
-class LoginRequest(BaseModel):
-    user_id : str
-    password : str
 
 class LoginRequest(BaseModel):
     user_id : str
@@ -89,11 +82,9 @@ class ProfileResponse(BaseModel):
     documents: list[ProfileDocumentResponse] = Field(default_factory=list)
 
 class ProfileSkillsInsert(BaseModel):
-    user_uuid: UUID
     skill: str
 
 class ProfileCoverletterInsert(BaseModel):
-    user_uuid: UUID
     title: str
     content: str
 

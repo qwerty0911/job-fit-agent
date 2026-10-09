@@ -13,11 +13,14 @@ from service.embedding_service import (
 from service.vector_store import save_chunks, search_user_documents
 
 
-async def save_document_to_mongodb(request) -> ObjectId:
+async def save_document_to_mongodb(
+        request,
+        user_uuid:str
+        ) -> ObjectId:
     db = get_database()
 
     document = {
-        "user_uuid": str(request.user_uuid),
+        "user_uuid": user_uuid,
         "document_type": "resume",
         "title": request.title,
         "content": request.content,
@@ -33,10 +36,12 @@ async def save_document_to_mongodb(request) -> ObjectId:
     return result.inserted_id
 
 
-async def create_profile_document(request):
-    mongo_document_id = await save_document_to_mongodb(request)
+async def create_profile_document(
+        *,
+        request
+        ,user_uuid:str):
+    mongo_document_id = await save_document_to_mongodb(request=request, user_uuid=user_uuid)
     document_id = str(mongo_document_id)
-    user_uuid = str(request.user_uuid)
     version = 1
     db = get_database()
 
