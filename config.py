@@ -51,3 +51,26 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
 
 if not JWT_SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY가 설정되지 않았습니다.")
+
+REDIS_URL = os.getenv(
+    "REDIS_URL",
+    "redis://localhost:6379/0",
+)
+
+REFRESH_TOKEN_TTL_SECONDS = int(
+    os.getenv("REFRESH_TOKEN_TTL_SECONDS", "1209600")
+)
+
+REFRESH_SESSION_MAX_SECONDS = int(
+    os.getenv("REFRESH_SESSION_MAX_SECONDS", "2592000")
+)
+
+REFRESH_COOKIE_SECURE = os.getenv(
+    "REFRESH_COOKIE_SECURE",
+    "false",
+).lower() == "true"
+
+REFRESH_COOKIE_SAMESITE = os.getenv(
+    "REFRESH_COOKIE_SAMESITE",
+    "lax",
+)

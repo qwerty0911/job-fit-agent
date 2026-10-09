@@ -4,21 +4,32 @@ from datetime import UTC, datetime
 import unicodedata
 from uuid import uuid4, UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import (
+    Cookie,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Response,
+)
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 
-from config import CORS_ORIGINS, MONGODB_DB_NAME, MONGODB_URI
-from database import close_mongodb_connection, connect_to_mongodb, get_database
+from config import (
+    CORS_ORIGINS,
+    MONGODB_DB_NAME,
+    MONGODB_URI,
+    REFRESH_COOKIE_SAMESITE,
+    REFRESH_COOKIE_SECURE,
+    REFRESH_TOKEN_TTL_SECONDS,
+)
+from database import close_mongodb_connection, connect_to_mongodb, get_database,get_redis, connect_to_redis, close_redis_connection
 from graph import create_graph
 from observability import create_langfuse_handler
 from schema import *
 from state import GraphContext
 from service.profile import get_profile, add_profile_skills_service
 from service.job_service import get_recommanded_postings
-
-from fastapi import Depends
 from service.auth import (
     get_current_user,
     normalize_user_id,
@@ -26,12 +37,20 @@ from service.auth import (
     verify_password,
     create_access_token,
 )
+from service.refresh_token import (
+    create_refresh_token,
+    store_refresh_session,
+    rotate_refresh_session,
+    revoke_refresh_session
+)
+from redis.exceptions import RedisError
 
 from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongodb()
+    await connect_to_redis()
     checkpoint_client = None
 
     try:
@@ -52,6 +71,8 @@ async def lifespan(app: FastAPI):
         if checkpoint_client is not None:
             checkpoint_client.close()
         await close_mongodb_connection()
+        await close_redis_connection()
+
 
 
 app = FastAPI(lifespan=lifespan)
@@ -72,8 +93,16 @@ from service.document_service import (
 @app.get("/health")
 async def health():
     database = get_database()
+    redis = get_redis()
+
+    await redis.ping()
     await database.command("ping")
-    return {"status": "ok", "mongodb": "connected"}
+
+    return {
+        "status": "ok", 
+        "mongodb": "connected",
+        "redis": "connected",
+    }
 
 @app.get("/auth/me")
 async def get_me(current_user=Depends(get_current_user)):
@@ -217,7 +246,7 @@ async def signup(request: SignupRequest):
 
 
 @app.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+async def login(request: LoginRequest,response: Response,):
     db = get_database()
 
     user_id = request.user_id.strip()
@@ -243,8 +272,100 @@ async def login(request: LoginRequest):
 
     access_token = create_access_token(user["_id"])
 
+    (
+        refresh_token,
+        token_id,
+        session_id,
+        family_id,
+    ) = create_refresh_token()
+
+    await store_refresh_session(
+        refresh_token=refresh_token,
+        token_id=token_id,
+        session_id=session_id,
+        family_id=family_id,
+        user_uuid=user["_id"],
+    )
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=REFRESH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=REFRESH_COOKIE_SECURE,
+        samesite=REFRESH_COOKIE_SAMESITE,
+        path="/",
+    )
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
         user_uuid=user["_id"],
+    )
+
+@app.post("/auth/refresh", response_model=LoginResponse)
+async def refresh_access_token(
+    response: Response,
+    refresh_token_value: str | None = Cookie(
+        default=None,
+        alias="refresh_token",
+    ),
+):
+    if refresh_token_value is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Refresh Token이 없습니다.",
+        )
+
+    try:
+        rotated = await rotate_refresh_session(
+            refresh_token_value,
+        )
+    except (RedisError, RuntimeError):
+        raise HTTPException(
+            status_code=503,
+            detail="인증 세션 저장소를 사용할 수 없습니다.",
+        )
+
+    if rotated is None:
+        raise HTTPException(
+            status_code=401,
+            detail="유효하지 않은 Refresh Token입니다.",
+        )
+
+    new_refresh_token, session_data = rotated
+    user_uuid = session_data["user_uuid"]
+
+    access_token = create_access_token(user_uuid)
+
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh_token,
+        max_age=REFRESH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=REFRESH_COOKIE_SECURE,
+        samesite=REFRESH_COOKIE_SAMESITE,
+        path="/",
+    )
+
+    return LoginResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user_uuid=user_uuid,
+    )
+
+@app.post("/auth/logout", status_code=204)
+async def logout(
+    response: Response,
+    refresh_token_value: str | None = Cookie(
+        default=None,
+        alias="refresh_token",
+    ),
+):
+    if refresh_token_value is not None:
+        await revoke_refresh_session(refresh_token_value)
+
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
     )
