@@ -115,3 +115,18 @@ class JobQualificationPosting(BaseModel):
     company_name: str
     job_title: str
     qualifications: list[str] = Field(default_factory=list)
+
+class ConversationCreate(BaseModel):
+    title: str = Field(
+        default="새 대화",
+        min_length=1,
+        max_length=100,
+    )
+
+class ConversationResponse(BaseModel):
+    conversation_id: UUID
+    owner_user_uuid: UUID
+    title: str
+    version: int
+    created_at: datetime
+    updated_at: datetime

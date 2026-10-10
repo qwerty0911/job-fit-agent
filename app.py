@@ -43,6 +43,15 @@ from service.refresh_token import (
     rotate_refresh_session,
     revoke_refresh_session
 )
+from service.conversation import (
+    create_conversation,
+    list_user_conversations,
+    get_owned_conversation,
+)
+from service.conversation_lock import (
+    acquire_conversation_lock,
+    release_conversation_lock
+)
 from redis.exceptions import RedisError
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,7 +100,7 @@ from service.document_service import (
 )
 
 @app.get("/health")
-async def health():
+async def health_endpoint():
     database = get_database()
     redis = get_redis()
 
@@ -105,43 +114,43 @@ async def health():
     }
 
 @app.get("/auth/me")
-async def get_me(current_user=Depends(get_current_user)):
+async def get_me_endpoint(current_user=Depends(get_current_user)):
     return {
         "user_uuid": current_user["_id"],
         "user_id": current_user["user_id"],
     }
 
 
-@app.post("/chat")
-async def chat(request: ChatRequest,current_user=Depends(get_current_user)):
-    user_uuid = current_user["_id"]
-    graph_config = {"configurable": {"thread_id": user_uuid}}
-    langfuse_handler = create_langfuse_handler()
+# @app.post("/chat")
+# async def chat_endpoint(request: ChatRequest,current_user=Depends(get_current_user)):
+#     user_uuid = current_user["_id"]
+#     graph_config = {"configurable": {"thread_id": user_uuid}}
+#     langfuse_handler = create_langfuse_handler()
 
-    if langfuse_handler is not None:
-        graph_config["callbacks"] = [langfuse_handler]
-        graph_config["metadata"] = {
-            "langfuse_user_id": user_uuid,
-            "langfuse_session_id": user_uuid,
-            "langfuse_tags": ["job-fit-agent"],
-        }
+#     if langfuse_handler is not None:
+#         graph_config["callbacks"] = [langfuse_handler]
+#         graph_config["metadata"] = {
+#             "langfuse_user_id": user_uuid,
+#             "langfuse_session_id": user_uuid,
+#             "langfuse_tags": ["job-fit-agent"],
+#         }
 
-    result = await app.state.graph.ainvoke(
-        {
-            # 체크포인트에 남아 있는 직전 실행 결과가 새 응답에 섞이지
-            # 않도록 실행 단위 결과 필드를 초기화한다.
-            "jobs_list": [],
-            "match_assessment": None,
-            "response": None,
-        },
-        config=graph_config,
-        context=GraphContext(
-            user_uuid=user_uuid,
-            message=request.message,
-        ),
-    )
+#     result = await app.state.graph.ainvoke(
+#         {
+#             # 체크포인트에 남아 있는 직전 실행 결과가 새 응답에 섞이지
+#             # 않도록 실행 단위 결과 필드를 초기화한다.
+#             "jobs_list": [],
+#             "match_assessment": None,
+#             "response": None,
+#         },
+#         config=graph_config,
+#         context=GraphContext(
+#             user_uuid=user_uuid,
+#             message=request.message,
+#         ),
+#     )
 
-    return {"response": result["response"]}
+#     return {"response": result["response"]}
 
 @app.get("/profile/me", response_model=ProfileResponse)
 async def get_profile_endpoint(current_user=Depends(get_current_user)):
@@ -154,7 +163,7 @@ async def get_profile_endpoint(current_user=Depends(get_current_user)):
     return result
 
 @app.post("/profile/add_skills", response_model=ProfileResponse)
-async def insert_profile_skills(request: ProfileSkillsInsert, current_user=Depends(get_current_user)):
+async def insert_profile_skills_endpoint(request: ProfileSkillsInsert, current_user=Depends(get_current_user)):
     user_uuid = current_user["_id"]
     result = await add_profile_skills_service(
         user_uuid=user_uuid,
@@ -211,7 +220,7 @@ async def get_recommended_postings_endpoint(current_user=Depends(get_current_use
 @app.post("/signup",
         response_model=SignupResponse,
         status_code=201,)
-async def signup(request: SignupRequest):
+async def signup_endpoint(request: SignupRequest):
     db = get_database()
     user_id = request.user_id
     user_id_key = normalize_user_id(user_id)
@@ -246,7 +255,7 @@ async def signup(request: SignupRequest):
 
 
 @app.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest,response: Response,):
+async def login_endpoint(request: LoginRequest,response: Response,):
     db = get_database()
 
     user_id = request.user_id.strip()
@@ -304,7 +313,7 @@ async def login(request: LoginRequest,response: Response,):
     )
 
 @app.post("/auth/refresh", response_model=LoginResponse)
-async def refresh_access_token(
+async def refresh_access_token_endpoint(
     response: Response,
     refresh_token_value: str | None = Cookie(
         default=None,
@@ -355,7 +364,7 @@ async def refresh_access_token(
     )
 
 @app.post("/auth/logout", status_code=204)
-async def logout(
+async def logout_endpoint(
     response: Response,
     refresh_token_value: str | None = Cookie(
         default=None,
@@ -369,3 +378,108 @@ async def logout(
         key="refresh_token",
         path="/",
     )
+
+@app.post(
+    "/conversations",
+    response_model=ConversationResponse,
+    status_code=201,)
+async def create_conversation_endpoint(
+    request: ConversationCreate,
+    current_user=Depends(get_current_user)
+    ):
+    return await create_conversation(
+        owner_user_uuid=current_user["_id"],
+        title=request.title
+    )
+
+@app.get("/conversations",
+    response_model=list[ConversationResponse],
+    )
+async def list_user_conversations_endpoint(current_user=Depends(get_current_user)):
+    return await list_user_conversations(
+        owner_user_uuid=current_user["_id"],
+    )
+
+@app.get("/conversations/{conversation_id}",response_model=ConversationResponse,)
+async def get_owned_conversation_endpoint(conversation_id: UUID,current_user=Depends(get_current_user)):
+    conversation = await get_owned_conversation(
+        conversation_id=conversation_id,
+        owner_user_uuid=current_user["_id"],
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
+
+    return conversation
+
+@app.post("/conversations/{conversation_id}/chat")
+async def send_conversation_message_endpoint(
+    conversation_id: UUID,
+    request: ChatRequest,
+    current_user=Depends(get_current_user)
+    ):
+    user_uuid = current_user["_id"]
+
+    conversation = await get_owned_conversation(
+        conversation_id=conversation_id,
+        owner_user_uuid=user_uuid,
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
+
+    lock_token = await acquire_conversation_lock(
+    str(conversation_id)
+)
+
+    if lock_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail="대화가 현재 처리 중입니다.",
+        )
+
+    conversation_id = str(conversation_id)
+    graph_config = {
+        "configurable": {
+            "thread_id": conversation_id,
+        }
+    }
+
+    langfuse_handler = create_langfuse_handler()
+
+    if langfuse_handler is not None:
+        graph_config["callbacks"] = [langfuse_handler]
+        graph_config["metadata"] = {
+            "langfuse_user_id": user_uuid,
+            "langfuse_session_id": conversation_id,
+            "langfuse_tags": ["job-fit-agent"],
+        }
+
+    try:
+        result = await app.state.graph.ainvoke(
+            {
+                "jobs_list": [],
+                "match_assessment": None,
+                "response": None,
+            },
+            config=graph_config,
+            context=GraphContext(
+                user_uuid=user_uuid,
+                message=request.message,
+            ),
+        )
+    finally:
+        await release_conversation_lock(
+        str(conversation_id),
+        lock_token,
+    )
+
+    return {
+        "response": result["response"],
+    }
