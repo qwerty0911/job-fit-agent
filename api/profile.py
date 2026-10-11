@@ -6,6 +6,10 @@ from service.document_service import (
     create_profile_document as create_profile_document_service,
     search_profile_documents_batch,
 )
+from service.document_job_service import (
+    create_document_job,
+    save_document_record,
+)
 from service.profile import add_profile_skills_service, get_profile
 
 
@@ -34,16 +38,37 @@ async def insert_profile_skills_endpoint(
     return result
 
 
-@router.post("/documents")
-async def create_profile_document_endpoint(
+# @router.post("/documents_old")
+# async def create_profile_document_endpoint_old(
+#     request: ProfileDocumentCreate,
+#     current_user=Depends(get_current_user),
+# ):
+#     document_id = await create_profile_document_service(
+#         request=request,
+#         user_uuid=current_user["_id"],
+#     )
+#     return {"document_id": document_id, "embedding_status": "indexed"}
+
+@router.post("/documents", status_code=202)
+async def create_profile_document_endpoint_old(
     request: ProfileDocumentCreate,
     current_user=Depends(get_current_user),
-):
-    document_id = await create_profile_document_service(
-        request=request,
-        user_uuid=current_user["_id"],
+    ):
+    document_id = await save_document_record(
+    request=request,
+    user_uuid=current_user["_id"],
     )
-    return {"document_id": document_id, "embedding_status": "indexed"}
+
+    job_id = await create_document_job(
+    document_id=document_id,
+    owner_user_uuid=current_user["_id"],
+    )
+    return {
+        "document_id": document_id,
+        "job_id": job_id,
+        "status": "pending",
+    }
+
 
 
 @router.post("/documents/search", response_model=list[VectorSearchQueryResult])

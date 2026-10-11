@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 
-from api import auth, conversations, health, postings, profile
+from api import auth, conversations, health, jobs, postings, profile
 from config import CORS_ORIGINS, MONGODB_DB_NAME, MONGODB_URI
 from database import (
     close_mongodb_connection,
@@ -58,3 +58,4 @@ app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(postings.router)
 app.include_router(conversations.router)
+app.include_router(jobs.router)

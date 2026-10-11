@@ -74,3 +74,10 @@ REFRESH_COOKIE_SAMESITE = os.getenv(
     "REFRESH_COOKIE_SAMESITE",
     "lax",
 )
+
+DOCUMENT_JOB_LEASE_SECONDS = int(
+    os.getenv(
+        "DOCUMENT_JOB_LEASE_SECONDS",
+        "60",
+    )
+)
