@@ -12,6 +12,7 @@ RUN python -m pip install --require-hashes -r requirements.lock \
     && useradd --uid 10001 --gid app --no-create-home app
 
 COPY *.py ./
+COPY api/ ./api/
 COPY service/ ./service/
 
 USER app
