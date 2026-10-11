@@ -13,3 +13,4 @@ langchain-text-splitters==1.1.2
 pydantic==2.13.4
 argon2-cffi==25.1.0
 redis[hiredis]==6.2.0
+PyJWT==2.10.1
