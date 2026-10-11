@@ -1,12 +1,12 @@
 from typing import Any
-
 from pymongo import AsyncMongoClient
-
-from config import MONGODB_DB_NAME, MONGODB_URI
+from config import MONGODB_DB_NAME, MONGODB_URI, REDIS_URL
+from redis.asyncio import Redis
 
 
 _client: AsyncMongoClient[dict[str, Any]] | None = None
 _database: Any | None = None
+_redis: Redis | None = None
 
 
 async def connect_to_mongodb() -> None:
@@ -48,3 +48,35 @@ def get_database() -> Any:
         raise RuntimeError("MongoDB가 연결되지 않았습니다.")
 
     return _database
+
+async def connect_to_redis() -> None:
+    global _redis
+
+    client = Redis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+    )
+
+    try:
+        await client.ping()
+    except Exception:
+        await client.aclose()
+        raise
+
+    _redis = client
+
+
+async def close_redis_connection() -> None:
+    global _redis
+
+    if _redis is not None:
+        await _redis.aclose()
+
+    _redis = None
+
+
+def get_redis() -> Redis:
+    if _redis is None:
+        raise RuntimeError("Redis가 연결되지 않았습니다.")
+
+    return _redis

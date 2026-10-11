@@ -54,16 +54,18 @@ async def get_profile(user_uuid: UUID) -> ProfileResponse | None:
     )
 
 async def add_profile_skills_service(
-    request: ProfileSkillsInsert,
+    *,
+    user_uuid: str,
+    skill: str,
 ) -> ProfileResponse | None:
 
     db = get_database()
 
     user = await db.users.find_one_and_update(
-        {"_id": str(request.user_uuid)},
+        {"_id": str(user_uuid)},
         {
             "$addToSet": {
-                "skills": request.skill
+                "skills": skill
             }
         },
         return_document=ReturnDocument.AFTER,
@@ -72,7 +74,7 @@ async def add_profile_skills_service(
     if user is None:
         return None
 
-    documents = await get_profile_documents(request.user_uuid)
+    documents = await get_profile_documents(user_uuid)
 
     return ProfileResponse(
         user_uuid=user["_id"],

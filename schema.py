@@ -5,16 +5,13 @@ from typing import Literal
 from uuid import UUID
 
 class ChatRequest(BaseModel):
-    user_uuid : UUID
     message: str
 
 class ProfileDocumentCreate(BaseModel):
-    user_uuid : UUID
     title : str
     content : str
 
 class ProfileDocumentSearch(BaseModel):
-    user_uuid: UUID
     queries: list[str] = Field(min_length=1, max_length=20)
     top_k: int = Field(default=5, ge=1, le=20)
     min_score: float = 0.7
@@ -49,6 +46,21 @@ class VectorSearchQueryResult(BaseModel):
 
 class LoginRequest(BaseModel):
     user_id : str
+    password : str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user_uuid: UUID
+
+class SignupRequest(BaseModel):
+    user_id: str = Field(min_length=2, max_length=20)
+    password: str = Field(min_length=8, max_length=128)
+
+class SignupResponse(BaseModel):
+    user_uuid: UUID
+    user_id: str
+    message: str
 
 class CoverLetterResponse(BaseModel):
     title: str
@@ -70,11 +82,9 @@ class ProfileResponse(BaseModel):
     documents: list[ProfileDocumentResponse] = Field(default_factory=list)
 
 class ProfileSkillsInsert(BaseModel):
-    user_uuid: UUID
     skill: str
 
 class ProfileCoverletterInsert(BaseModel):
-    user_uuid: UUID
     title: str
     content: str
 
@@ -105,3 +115,18 @@ class JobQualificationPosting(BaseModel):
     company_name: str
     job_title: str
     qualifications: list[str] = Field(default_factory=list)
+
+class ConversationCreate(BaseModel):
+    title: str = Field(
+        default="새 대화",
+        min_length=1,
+        max_length=100,
+    )
+
+class ConversationResponse(BaseModel):
+    conversation_id: UUID
+    owner_user_uuid: UUID
+    title: str
+    version: int
+    created_at: datetime
+    updated_at: datetime

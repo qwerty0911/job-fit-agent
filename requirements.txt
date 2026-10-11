@@ -11,3 +11,5 @@ pymongo==4.16.0
 pinecone==9.1.0
 langchain-text-splitters==1.1.2
 pydantic==2.13.4
+argon2-cffi==25.1.0
+redis[hiredis]==6.2.0
