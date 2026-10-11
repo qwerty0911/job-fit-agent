@@ -14,6 +14,8 @@ async def create_document_job(
     *,
     document_id: str,
     owner_user_uuid: str,
+    idempotency_key: str,
+    request_hash: str,
 ) -> str:
     job_id = str(uuid4())
     now = datetime.now(UTC)
@@ -23,6 +25,8 @@ async def create_document_job(
         "job_type": "document_indexing",
         "document_id": document_id,
         "owner_user_uuid": owner_user_uuid,
+        "idempotency_key": idempotency_key,
+        "request_hash": request_hash,
         "status": "pending",
         "attempts": 0,
         "max_attempts": 3,
@@ -69,7 +73,7 @@ async def claim_document_job(job_id: str) -> dict | None:
     lease_until = now + timedelta(
         seconds=DOCUMENT_JOB_LEASE_SECONDS
     )
-    
+
     # pending 작업 하나만 원자적으로 running으로 변경
     job = await db.document_jobs.find_one_and_update(
         {
@@ -219,3 +223,34 @@ async def get_document_job_status(
     )
 
     return job
+
+
+async def find_existing_document_job(
+    *,
+    owner_user_uuid: str,
+    idempotency_key: str,
+) -> dict | None:
+    db = get_database()
+
+    return await db.document_jobs.find_one(
+        {
+            "owner_user_uuid": owner_user_uuid,
+            "job_type": "document_indexing",
+            "idempotency_key": idempotency_key,
+        }
+    )
+
+
+async def delete_document_record(
+    *,
+    document_id: str,
+    owner_user_uuid: str,
+) -> None:
+    db = get_database()
+
+    await db.profile_documents.delete_one(
+        {
+            "_id": ObjectId(document_id),
+            "user_uuid": owner_user_uuid,
+        }
+    )
