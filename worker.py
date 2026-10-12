@@ -4,7 +4,10 @@ import logging
 from database import connect_to_mongodb, close_mongodb_connection, get_database
 from datetime import UTC, datetime
 
-from service.document_job_service import process_document_job
+from service.document_job_service import (
+    process_document_cleanup_job,
+    process_document_job,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,7 +51,10 @@ async def worker_loop() -> None:
         logger.info("문서 작업 처리 시작: %s", job_id)
 
         try:
-            await process_document_job(job_id)
+            if job["job_type"] == "document_cleanup":
+                await process_document_cleanup_job(job_id)
+            else:
+                await process_document_job(job_id)
             logger.info("문서 작업 처리 완료: %s", job_id)
         except Exception:
             logger.exception("문서 작업 처리 실패: %s", job_id)

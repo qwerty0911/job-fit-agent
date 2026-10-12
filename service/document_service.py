@@ -118,15 +118,27 @@ async def search_profile_documents_batch(
 ) -> list[dict]:
     query_embeddings = await create_query_embeddings(queries)
 
+    async def search_one_query(
+        query_embedding: list[float],
+    ) -> list[dict]:
+        matches = await search_user_documents(
+            user_uuid=user_uuid,
+            query_embedding=query_embedding,
+            top_k=min(top_k * 3, 50),
+            min_score=min_score,
+            document_type=document_type,
+        )
+
+        active_matches = await filter_active_document_matches(
+            user_uuid=user_uuid,
+            matches=matches,
+        )
+
+        return active_matches[:top_k]
+
     matches_by_query = await asyncio.gather(
         *[
-            search_user_documents(
-                user_uuid=user_uuid,
-                query_embedding=query_embedding,
-                top_k=top_k,
-                min_score=min_score,
-                document_type=document_type,
-            )
+            search_one_query(query_embedding)
             for query_embedding in query_embeddings
         ]
     )
@@ -140,5 +152,58 @@ async def search_profile_documents_batch(
             queries,
             matches_by_query,
             strict=True,
+        )
+    ]
+
+async def filter_active_document_matches(
+    *,
+    user_uuid: str,
+    matches: list[dict],
+) -> list[dict]:
+    if not matches:
+        return []
+
+    document_ids = {
+        match["metadata"]["document_id"]
+        for match in matches
+        if match.get("metadata", {}).get("document_id")
+    }
+
+    object_ids = []
+    for document_id in document_ids:
+        try:
+            object_ids.append(ObjectId(document_id))
+        except Exception:
+            continue
+
+    if not object_ids:
+        return []
+
+    db = get_database()
+
+    documents = await db.profile_documents.find(
+        {
+            "_id": {"$in": object_ids},
+            "user_uuid": user_uuid,
+            "status": "active",
+        },
+        {
+            "_id": 1,
+            "active_version": 1,
+        },
+    ).to_list(length=None)
+
+    active_versions = {
+        str(document["_id"]): document.get("active_version")
+        for document in documents
+    }
+
+    return [
+        match
+        for match in matches
+        if (
+            match["metadata"].get("document_id") in active_versions
+            and match["metadata"].get("version")
+            == active_versions[match["metadata"]["document_id"]]
         )
     ]
