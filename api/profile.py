@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 
 from pymongo.errors import DuplicateKeyError
 
-from schema import ProfileDocumentCreate, ProfileDocumentSearch, ProfileResponse, ProfileSkillsInsert, VectorSearchQueryResult
+from schema import (
+    ProfileDocumentCreate,
+    ProfileDocumentSearch,
+    ProfileDocumentUpdate,
+    ProfileResponse,
+    ProfileSkillsInsert,
+    VectorSearchQueryResult,
+)
 from service.auth import get_current_user
 from service.document_service import (
     create_profile_document as create_profile_document_service,
@@ -12,9 +19,12 @@ from service.document_service import (
 )
 from service.document_job_service import (
     create_document_job,
+    create_document_version,
     delete_document_record,
     save_document_record,
     find_existing_document_job,
+    mark_document_deleted,
+    create_document_cleanup_job,
 )
 from service.idempotency import (
     create_request_hash,
@@ -23,8 +33,8 @@ from service.idempotency import (
 from service.profile import add_profile_skills_service, get_profile
 
 
-router = APIRouter(prefix="/profile", tags=["profile"])
 
+router = APIRouter(prefix="/profile", tags=["profile"])
 
 @router.get("/me", response_model=ProfileResponse)
 async def get_profile_endpoint(current_user=Depends(get_current_user)):
@@ -100,6 +110,7 @@ async def create_profile_document_endpoint(
         job_id = await create_document_job(
             document_id=document_id,
             owner_user_uuid=current_user["_id"],
+            version=1,
             idempotency_key=normalized_key,
             request_hash=request_hash,
         )
@@ -127,6 +138,12 @@ async def create_profile_document_endpoint(
                 detail="같은 Idempotency-Key로 다른 요청이 사용되었습니다.",
             )
 
+        return {
+            "document_id": existing_job["document_id"],
+            "job_id": existing_job["_id"],
+            "status": existing_job["status"],
+        }
+
     return {
         "document_id": document_id,
         "job_id": job_id,
@@ -146,3 +163,64 @@ async def search_profile_documents_endpoint(
         min_score=request.min_score,
         document_type=request.document_type,
     )
+
+@router.put("/documents/{document_id}", status_code=202)
+async def update_profile_document_endpoint(
+    document_id: str,
+    request: ProfileDocumentUpdate,
+    current_user=Depends(get_current_user),
+):
+    try:
+        version = await create_document_version(
+            document_id=document_id,
+            owner_user_uuid=current_user["_id"],
+            title=request.title,
+            content=request.content,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    job_id = await create_document_job(
+        document_id=document_id,
+        owner_user_uuid=current_user["_id"],
+        version=version,
+        idempotency_key=f"document-update:{document_id}:v{version}",
+        request_hash="",
+    )
+
+    return {
+        "document_id": document_id,
+        "job_id": job_id,
+        "version": version,
+        "status": "pending",
+    }
+
+@router.delete("/documents/{document_id}", status_code=202)
+async def delete_profile_document_endpoint(
+    document_id: str,
+    current_user=Depends(get_current_user),
+):
+    deleted = await mark_document_deleted(
+        document_id=document_id,
+        owner_user_uuid=current_user["_id"],
+    )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="문서를 찾을 수 없습니다.",
+        )
+
+    job_id = await create_document_cleanup_job(
+        document_id=document_id,
+        owner_user_uuid=current_user["_id"],
+    )
+
+    return {
+        "document_id": document_id,
+        "job_id": job_id,
+        "status": "pending",
+    }

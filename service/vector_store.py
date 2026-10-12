@@ -131,3 +131,20 @@ async def search_user_documents(
         for result in search_results
         if result["score"] >= min_score
     ]
+
+async def delete_document_vectors(
+    *,
+    user_uuid: str,
+    document_id: str,
+) -> None:
+    index = _get_index()
+
+    await asyncio.to_thread(
+        index.delete,
+        namespace=user_namespace(user_uuid),
+        filter={
+            "document_id": {
+                "$eq": document_id,
+            },
+        },
+    )
