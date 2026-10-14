@@ -1,57 +1,82 @@
-# AI Job Matcher
+# Job Fit Agent
 
-사용자의 자연어 요청을 분석해 채용 공고를 검색하고, 이력서 근거를 바탕으로 특정 공고의 지원 적합도를 평가하는 AI 채용 지원 서비스입니다.
+자연어로 채용 공고를 검색하고, 등록한 이력서를 근거로 공고별 지원 적합도를 평가하는 **LangGraph 기반 AI 채용 에이전트**입니다.
 
-LangGraph를 활용해 만든 멀티스텝 AI 에이전트 워크플로입니다.
+기능 구현 이후 **재시도, 동시 요청, 워커 장애** 상황에서도 데이터가 중복되거나 유실되지 않도록 백엔드 안정성을 개선했습니다.
+
+| 개선 항목 | 해결한 문제 | 핵심 기술 | 검증 결과 (k6) |
+| --- | --- | --- | --- |
+| [문서 등록 멱등성](#1-문서-등록-멱등성) | 재시도·동시 요청 시 문서·작업 중복 생성 | Idempotency-Key, 요청 해시, MongoDB 유니크 복합 인덱스 | 중복률 **95% → 0%** |
+| [대화별 동시성 제어](#2-대화별-동시성-제어) | 같은 대화의 동시 요청으로 상태 충돌·LLM 중복 호출 | Redis 분산 락 (`SET NX EX`, Lua 해제) | 중복 실행 **4회 → 0회** |
+| [비동기 인덱싱·장애 복구](#3-비동기-문서-인덱싱과-장애-복구) | 임베딩 대기로 응답 지연, 워커 중단 시 작업 방치 | 작업 큐 컬렉션, 원자적 선점, lease 만료 재처리 | 복구율 **0% → 100%** |
+
+## 목차
+
+- [주요 기능](#주요-기능)
+- [아키텍처](#아키텍처)
+- [안정성 개선](#안정성-개선)
+- [기술 스택](#기술-스택)
+- [프로젝트 구조](#프로젝트-구조)
+- [실행 방법](#실행-방법)
+- [API](#api)
+- [테스트](#테스트)
+- [한계와 다음 단계](#한계와-다음-단계)
+- [상세 문서](#상세-문서)
 
 ## 주요 기능
 
-### 1. 자연어 기반 채용 공고 검색
+### 자연어 기반 채용 공고 검색
 
-사용자가 입력한 문장에서 직무, 기술 키워드, 지역, 고용 형태를 추출한 뒤 MongoDB의 채용 공고를 검색합니다.
+사용자 문장에서 의도와 검색 조건(직무, 기술 키워드, 지역, 고용 형태)을 한 번의 LLM 호출로 추출한 뒤 MongoDB의 채용 공고를 검색합니다.
 
 ```text
 사용자: 서울 Python 백엔드 공고 찾아줘
-
-추출 결과:
-- intent: search_job
-- keyword: Python 백엔드
-- job_title: 백엔드 개발자
-- location: 서울
+→ intent: search_job, keyword: Python 백엔드, job_title: 백엔드 개발자, location: 서울
 ```
 
-검색된 공고 ID는 사용자의 `recommanded_postings`에 중복 없이 저장되며, 이후 추천 공고 목록에서 다시 조회할 수 있습니다.
+검색 결과의 공고 ID 순서를 대화 상태에 저장하므로, 이어서 "2번 공고 분석해줘"처럼 질문하면 해당 공고로 적합도 분석을 실행합니다.
 
-### 2. 이력서 저장 및 벡터 검색
+### 이력서 등록과 벡터 검색
 
-사용자가 등록한 이력서 원문은 MongoDB에 저장합니다. 원문을 여러 청크로 분할하고 임베딩한 결과는 Pinecone에 저장합니다.
+이력서 원문과 버전은 MongoDB에, 청크 임베딩은 Pinecone에 저장합니다.
 
-- MongoDB: 문서 원문과 벡터 저장 상태 관리
-- Pinecone: 문서 청크 및 임베딩 저장
-- Namespace: `user-{user_uuid}`
-- Vector ID: `{document_id}:v{version}:chunk:{chunk_index}`
+- Namespace: `user-{user_uuid}` (사용자별 데이터 분리)
+- Vector ID: `{document_id}:v{version}:chunk:{chunk_index}` (결정적 ID로 재처리 시 중복 방지)
+- 등록·수정·삭제는 비동기 작업으로 처리되며, 인덱싱에 성공한 버전만 검색에 노출됩니다.
 
-사용자별 namespace를 사용하므로 한 사용자가 등록한 여러 이력서를 한 번에 검색하면서 다른 사용자의 문서와 분리할 수 있습니다.
+### 공고 지원 적합도 분석
 
-### 3. 채용 공고 지원 적합도 분석
+1. 회사명과 직무명으로 채용 공고 검색
+2. 공고의 자격요건(`qualifications`)을 각각 검색 쿼리로 사용해 이력서 근거 검색
+3. 검색된 이력서 원문을 LLM이 다시 검토해 자격요건별로 판정
+4. 강점, 보완점, 종합 점수 생성
 
-사용자가 특정 회사와 직무에 지원할 만한지 질문하면 다음 순서로 분석합니다.
+판정은 `satisfied`, `partially_satisfied`, `insufficient_evidence` 세 가지입니다. 벡터 유사도는 근거 후보를 찾는 데만 쓰고, 최종 판단은 LLM이 원문을 보고 내립니다.
 
-1. MongoDB에서 회사명과 직무명으로 채용 공고 검색
-2. 공고의 `qualifications`를 각각 별도의 검색 쿼리로 사용
-3. 각 자격요건을 임베딩해 사용자의 전체 이력서에서 관련 근거 검색
-4. 검색된 이력서 원문을 LLM이 다시 검토
-5. 자격요건별 충족 여부, 강점, 보완점 및 종합 점수 생성
+## 아키텍처
 
-자격요건별 판정 상태는 다음 세 가지입니다.
+```mermaid
+flowchart LR
+    C[Client] --> API[FastAPI]
+    API --> G[LangGraph 에이전트]
+    API -->|대화 Lock| R[(Redis)]
+    API -->|문서·pending 작업 저장| M[(MongoDB)]
+    G -->|체크포인트·채용 공고| M
+    G -->|이력서 벡터 검색| P[(Pinecone)]
+    W[Worker] -->|작업 선점·상태 갱신| M
+    W -->|임베딩 upsert| P
+```
 
-- `satisfied`: 직접적인 충족 근거가 있음
-- `partially_satisfied`: 관련 경험은 있지만 일부 내용이 불명확함
-- `insufficient_evidence`: 이력서에서 확인할 근거가 부족함
+| 구성 요소 | 역할 |
+| --- | --- |
+| FastAPI | JWT 인증, 대화·채팅, 문서 등록 API. 문서 등록은 작업만 저장하고 `202 Accepted`로 즉시 응답 |
+| LangGraph | 의도 추출 → 공고 검색 또는 자격요건별 근거 검색 → 적합도 평가 → 응답 생성 |
+| MongoDB | 채용 공고, 이력서·버전, 작업 큐(`document_jobs`), 대화별 LangGraph 체크포인트 |
+| Redis | 대화별 분산 락, Refresh Token 회전 |
+| Worker | 작업을 원자적으로 선점해 청크 분할, 임베딩, Pinecone 저장 수행 |
+| Pinecone | 사용자별 namespace로 분리된 이력서 청크 벡터 |
 
-벡터 유사도 점수는 후보 근거를 찾는 용도로만 사용하며, 최종 충족 여부는 LLM이 이력서 원문을 확인해 판단합니다.
-
-## 워크플로
+### 에이전트 워크플로
 
 ```mermaid
 flowchart TD
@@ -59,292 +84,348 @@ flowchart TD
     B -->|search_job| C[MongoDB 채용 공고 검색]
     B -->|matching_score| D[회사 및 직무 공고 검색]
     B -->|others| H[지원 가능한 요청 안내]
-
-    C --> E[추천 공고 ID 저장]
+    C --> E[최근 공고 ID 저장]
     D --> F[자격요건별 이력서 벡터 검색]
     F --> G[LLM 자격요건별 근거 재평가]
-
     E --> I[최종 응답 생성]
     G --> I
     H --> I
 ```
 
-현재는 하나의 LangGraph 상태를 여러 전문 노드가 순서대로 처리하는 구조입니다.
+각 채팅은 `conversation_id`를 LangGraph `thread_id`로 사용해 MongoDB 체크포인트에 대화별 상태를 저장합니다.
 
-각 `/chat` 실행은 `user_uuid`를 LangGraph `thread_id`로 사용하며,
-MongoDB의 `langgraph_checkpoints`와 `langgraph_checkpoint_writes` 컬렉션에
-체크포인트가 저장됩니다. 현재 상태에는 누적 메시지 목록을 두지 않으므로
-대화 이력을 이용한 후속 질문은 지원하지 않습니다. 사용자 메시지는 실행
-컨텍스트로만 전달되며 체크포인트 상태에는 저장되지 않습니다.
+## 안정성 개선
 
-공고 검색 결과의 ID 순서는 `recent_posting_ids`에 저장됩니다. 따라서 같은
-사용자가 이어서 "첫 번째 공고 어떤 것 같아?", "2번 공고 분석해줘"처럼
-질문하면 해당 공고 ID를 정확히 선택해 지원 적합도 분석을 실행할 수 있습니다.
-새로운 검색을 실행하면 최근 공고 ID 목록도 새로운 검색 결과로 교체됩니다.
+### 1. 문서 등록 멱등성
 
-- `route_intent_node`: 의도와 검색 조건을 한 번에 추출
-- `job_search_node`: 키워드 기반 채용 공고 검색
-- `matching_score_node`: 공고 자격요건과 이력서 근거 비교
-- `final_node`: 검색 및 적합도 분석 결과를 사용자 응답으로 변환
+**문제.** 등록 응답이 유실되면 클라이언트는 같은 요청을 다시 보냅니다. 요청마다 문서와 작업을 새로 만들면 이력서, 임베딩 비용, Pinecone 벡터가 모두 중복됩니다. "조회 후 없으면 생성" 방식은 동시 요청 사이의 경쟁 조건 때문에 중복을 막지 못합니다.
+
+```mermaid
+flowchart LR
+    A[문서 등록 요청] --> B{같은 키 존재?}
+    B -->|없음| C[문서·작업 생성]
+    B -->|같은 요청| D[기존 결과 반환]
+    B -->|다른 요청| E[409 Conflict]
+```
+
+**설계와 구현.**
+
+- 요청 식별 범위는 `owner_user_uuid + job_type + idempotency_key`입니다. 다른 사용자가 같은 키를 써도 충돌하지 않습니다.
+- `title`, `content`를 정규화한 SHA-256 해시로 같은 요청인지 판별합니다. 원문 대신 해시만 작업 기록에 저장합니다.
+- 선조회는 빠른 경로로만 쓰고, 동시성 보장은 MongoDB 유니크 복합 인덱스에 맡겼습니다.
+- 동시 요청이 먼저 작업을 만들어 `DuplicateKeyError`가 나면, 방금 만든 문서를 삭제(보상 처리)하고 먼저 생성된 결과를 반환합니다.
+
+```javascript
+db.document_jobs.createIndex(
+  { job_type: 1, idempotency_key: 1, owner_user_uuid: 1 },
+  { unique: true, name: "uniq_document_job_idempotency" }
+)
+```
+
+**검증.** 같은 사용자, 같은 키, 같은 내용의 요청 20건을 동시에 전송했습니다.
+
+| 지표 | 개선 전 | 개선 후 |
+| --- | --- | --- |
+| 생성된 문서 수 | 20개 | **1개** |
+| 중복 생성 | 19건 | **0건** |
+| 중복률 | 95% | **0%** |
+| 같은 키·다른 내용 재요청 | 새 문서 생성 | `409 Conflict` |
+
+중복률 = (생성 문서 수 − 1) / 요청 수
+
+### 2. 대화별 동시성 제어
+
+**문제.** 버튼 연타나 여러 탭에서 같은 대화에 동시에 요청하면, 두 그래프 실행이 같은 체크포인트를 읽고 덮어써 상태가 꼬이고 LLM 호출도 중복됩니다. 반대로 모든 요청을 직렬화하면 관계없는 대화까지 기다리게 됩니다.
+
+```mermaid
+flowchart LR
+    A[채팅 요청] --> B{대화 Lock 획득?}
+    B -->|성공| C[답변 생성]
+    C --> D[Lock 해제]
+    B -->|실패| E[409 Conflict]
+```
+
+**설계와 구현.**
+
+- 락 키를 `lock:conversation:{conversation_id}`로 두어 같은 대화만 상호 배제하고, 다른 대화는 병렬로 처리합니다.
+- API 서버를 여러 인스턴스로 늘려도 동작하도록 프로세스 내 락 대신 Redis를 사용합니다.
+- `SET key token NX EX 120`으로 원자적으로 획득합니다. 서버가 죽어도 TTL이 지나면 락이 자동 해제됩니다.
+- 해제는 Lua 스크립트로 "내 토큰일 때만 삭제"합니다. TTL 만료 후 다른 요청이 잡은 락을 지우는 문제를 막습니다.
+- LLM 응답은 오래 걸릴 수 있어, 대기열에 쌓지 않고 `409 Conflict`로 즉시 거절합니다.
+
+```lua
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+```
+
+**검증.** 같은 대화에 메시지 5건을 동시에 전송했습니다.
+
+| 지표 | 개선 전 | 개선 후 |
+| --- | --- | --- |
+| 그래프 실행 횟수 | 5회 | **1회** |
+| 중복 실행 | 4회 | **0회** (4건 `409`) |
+| 서로 다른 대화 동시 요청 | 모두 처리 | **모두 `200`, 병렬 처리** |
+
+### 3. 비동기 문서 인덱싱과 장애 복구
+
+**문제.** 청크 분할, 임베딩 API, Pinecone 저장을 동기로 처리하면 응답 속도가 외부 API에 묶입니다. 처리 중 프로세스가 죽으면 작업이 "진행 중" 상태로 남아 끝나지 않고, 워커가 여러 개면 같은 작업을 동시에 처리할 수 있습니다.
+
+```mermaid
+flowchart LR
+    A[문서 등록] --> B[pending 작업 저장]
+    B --> C[Worker 처리]
+    C --> D[succeeded]
+    C -. 워커 중단 .-> E[lease 만료]
+    E --> C
+```
+
+**설계와 구현.**
+
+- API는 문서와 `pending` 작업만 저장하고 `202 Accepted`와 `job_id`를 반환합니다. 진행 상황은 `GET /jobs/{job_id}`로 확인합니다.
+- 별도 메시지 큐 대신 MongoDB `document_jobs` 컬렉션을 작업 큐로 사용합니다. 상태, 시도 횟수, 오류를 한곳에서 조회할 수 있습니다.
+- `find_one_and_update`로 상태 전이를 원자적으로 수행해, 여러 워커 중 하나만 작업을 가져갑니다.
+- 선점한 워커는 `lease_until`(기본 60초)까지만 소유권을 가집니다. lease가 지나면 다른 워커가 작업을 다시 선점합니다.
+- 선점할 때마다 `attempts`를 증가시키고 최대 3회까지만 재시도합니다.
+- 결정적 벡터 ID로 upsert하므로 재처리되어도 벡터가 중복되지 않습니다.
+
+```python
+job = await db.document_jobs.find_one_and_update(
+    {
+        "_id": job_id,
+        "$or": [
+            {"status": "pending"},
+            {"status": "running", "lease_until": {"$lte": now}},
+        ],
+        "$expr": {"$lt": ["$attempts", "$max_attempts"]},
+    },
+    {
+        "$set": {"status": "running", "lease_until": lease_until},
+        "$inc": {"attempts": 1},
+    },
+    return_document=ReturnDocument.AFTER,
+)
+```
+
+**검증.** 워커를 멈춘 상태에서 작업 100건을 만들고, lease가 만료된 `running` 상태로 바꿔 크래시를 재현한 뒤 워커를 재시작했습니다.
+
+| 지표 | 개선 전 | 개선 후 |
+| --- | --- | --- |
+| 주입한 만료 작업 | 100건 | 100건 |
+| 자동 복구 | 0건 (복구 기능 없음) | **100건** |
+| 복구율 | 0% | **100%** |
+| 최종 실패 | — | **0건** |
+| 중복 문서·벡터 | — | **0건** |
+
+### 문서 버전 관리
+
+이력서를 수정하면 `current_version`을 원자적으로 증가시키고, 해당 버전의 원문 스냅샷과 인덱싱 작업을 함께 만듭니다. 인덱싱에 성공한 버전만 `active_version`으로 전환하므로, 새 버전 인덱싱이 실패해도 검색에는 직전 정상 버전이 계속 노출됩니다. 자세한 내용은 [문서 버전 관리](docs/document-versioning.md)를 참고하세요.
 
 ## 기술 스택
 
 | 구분 | 기술 |
 | --- | --- |
-| Backend | Python 3.12, FastAPI, Uvicorn |
-| AI Workflow | LangGraph, LangChain |
-| LLM | OpenAI-compatible Chat API |
-| Embedding | OpenAI-compatible Embedding API |
-| Database | MongoDB |
+| Backend | Python 3.12, FastAPI, Uvicorn, Pydantic |
+| AI Workflow | LangGraph, LangChain, Langfuse (추적) |
+| LLM / Embedding | OpenAI-compatible Chat API, Embedding API |
+| Database | MongoDB, Redis |
 | Vector Database | Pinecone |
-| Validation | Pydantic |
+| Auth | Argon2id, JWT Access Token, Redis Refresh Token 회전 |
+| Infra | Docker, Docker Compose, GitHub Actions, Raspberry Pi (ARM64) |
+| Test | k6 |
 
 ## 프로젝트 구조
 
 ```text
 .
-├── app.py                         # FastAPI 앱과 API 엔드포인트
-├── graph.py                       # LangGraph 노드 및 조건부 엣지 구성
-├── nodes.py                       # 의도 분류, 공고 검색, 적합도 분석 노드
-├── state.py                       # 그래프 상태와 LLM 구조화 출력 모델
-├── schema.py                      # API 요청/응답 Pydantic 모델
-├── database.py                    # MongoDB 연결 생명주기 관리
-├── config.py                      # 환경변수 로드
-├── llm.py                         # Chat LLM 생성
-├── service
-│   ├── profile.py                # 프로필 및 기술 스택 관리
-│   ├── job_service.py            # 공고 검색 및 추천 공고 관리
-│   ├── document_service.py       # 이력서 원문 및 벡터 인덱싱 흐름
-│   ├── embedding_service.py      # 청킹 및 임베딩 생성
-│   └── vector_store.py           # Pinecone 저장 및 검색
-├── .env.example
-└── requirments.txt
+├── app.py                        # FastAPI 앱, lifespan, 라우터 등록
+├── worker.py                     # 문서 인덱싱·정리 작업 Worker
+├── graph.py                      # LangGraph 노드 및 조건부 엣지
+├── nodes.py                      # 의도 분류, 공고 검색, 적합도 분석 노드
+├── state.py                      # 그래프 상태와 LLM 구조화 출력 모델
+├── schema.py                     # API 요청/응답 모델
+├── database.py                   # MongoDB·Redis 연결 관리
+├── config.py                     # 환경변수
+├── llm.py                        # Chat LLM 생성
+├── observability.py              # Langfuse 연동
+├── api/
+│   ├── auth.py                   # 회원가입, 로그인, 토큰 갱신, 로그아웃
+│   ├── conversations.py          # 대화 생성·조회, 채팅
+│   ├── profile.py                # 프로필, 이력서 등록·수정·삭제·검색
+│   ├── jobs.py                   # 문서 작업 상태 조회
+│   ├── postings.py               # 추천 공고 조회
+│   └── health.py
+├── service/
+│   ├── idempotency.py            # Idempotency-Key 정규화, 요청 해시
+│   ├── conversation_lock.py      # Redis 대화 락
+│   ├── document_job_service.py   # 작업 생성·선점·처리, 문서 버전
+│   ├── embedding_service.py      # 청킹, 임베딩
+│   ├── vector_store.py           # Pinecone 저장·검색·삭제
+│   ├── refresh_token.py          # Refresh Token 회전
+│   └── ...
+├── tests/load/                   # k6 부하·동시성·복구 테스트
+├── reports/                      # k6 HTML 리포트
+├── docs/                         # 기능별 상세 문서
+├── Dockerfile
+└── compose.yaml
 ```
 
 ## 실행 방법
 
-### 1. 저장소 준비
+### 1. 패키지 설치
 
 ```bash
-git clone <repository-url>
-cd mini-pjt
-```
+git clone https://github.com/qwerty0911/job-fit-agent.git
+cd job-fit-agent
 
-### 2. 가상환경 및 패키지 설치
-
-```bash
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -r requirements.lock
 ```
 
-### 3. 환경변수 설정
-
-`.env.example`을 복사해 `.env` 파일을 만들고 값을 입력합니다.
+### 2. 환경변수 설정
 
 ```bash
 cp .env.example .env
 ```
 
-```dotenv
-# 채팅 LLM
-OPENAI_API_KEY=
-OPENAI_BASE_URL=
+주요 항목은 다음과 같습니다. 전체 목록은 [.env.example](.env.example)을 참고하세요.
 
-# MongoDB
-MONGODB_URI=mongodb://localhost:27017
-MONGODB_DB_NAME=job_matcher
+| 변수 | 설명 |
+| --- | --- |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` | 채팅 LLM |
+| `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | 임베딩 모델 |
+| `MONGODB_URI`, `MONGODB_DB_NAME` | MongoDB |
+| `REDIS_URL` | Redis (대화 락, Refresh Token) |
+| `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `PINECONE_INDEX_HOST` | Pinecone. 인덱스 dimension은 임베딩 모델 출력 차원과 같아야 합니다. |
+| `JWT_SECRET_KEY` | Access Token 서명 키 |
+| `DOCUMENT_JOB_LEASE_SECONDS` | 작업 lease 시간 (기본 60초) |
+| `LANGFUSE_*` | 선택. LLM 호출 추적 |
 
-# Pinecone
-PINECONE_API_KEY=
-PINECONE_INDEX_NAME=
-PINECONE_INDEX_HOST=
-
-# Embedding
-EMBEDDING_API_KEY=
-EMBEDDING_BASE_URL=https://api.openai.com/v1
-EMBEDDING_MODEL=text-embedding-3-large
-```
-
-`OPENAI_API_KEY`와 `EMBEDDING_API_KEY`는 같은 공급자의 API를 사용한다면 같은 키를 넣어도 됩니다. 서로 다른 공급자나 프로젝트를 사용한다면 각각 알맞은 키와 Base URL을 설정해야 합니다.
-
-Pinecone 인덱스의 dimension은 선택한 임베딩 모델의 출력 차원과 일치해야 합니다. 인덱스 이름은 `PINECONE_INDEX_NAME`에 입력하며, index host를 알고 있다면 `PINECONE_INDEX_HOST`도 설정할 수 있습니다.
-
-### 4. MongoDB 데이터 준비
-
-채용 공고는 `job_postings` 컬렉션에 저장합니다.
-
-```json
-{
-  "company_name": "테크웨이브",
-  "job_title": "백엔드 개발자",
-  "job_title_normalized": "백엔드개발자",
-  "tech_stack": ["Python", "FastAPI", "MongoDB"],
-  "qualifications": [
-    "Python 기반 애플리케이션 개발 경험",
-    "LLM API를 활용한 프로젝트 경험",
-    "비동기 처리에 대한 이해"
-  ],
-  "preferred_qualifications": ["LangGraph 사용 경험"],
-  "location": "서울",
-  "experience": "신입 또는 경력",
-  "job_type": "정규직",
-  "posting_url": "https://example.com/jobs/1"
-}
-```
-
-### 5. 서버 실행
+### 3. 서버와 Worker 실행
 
 ```bash
+# Redis (로컬에 없을 때)
+docker compose up -d redis
+
+# API 서버
 uvicorn app:app --reload
+
+# Worker (별도 터미널)
+python worker.py
 ```
 
 - API 문서: `http://127.0.0.1:8000/docs`
 - 상태 확인: `http://127.0.0.1:8000/health`
 
-## Docker 실행 및 라즈베리파이 배포 준비
+Worker가 실행 중이어야 이력서 등록·수정·삭제 작업이 처리됩니다.
 
-Docker 구성과 환경변수, MongoDB 연결, ARM64 빌드 방법은 [배포 안내](docs/deployment.md)를 참고하세요.
+### 4. 채용 공고 데이터
+
+채용 공고는 MongoDB `job_postings` 컬렉션에 저장합니다.
+
+```json
+{
+  "company_name": "테크웨이브",
+  "job_title": "백엔드 개발자",
+  "tech_stack": ["Python", "FastAPI", "MongoDB"],
+  "qualifications": ["Python 기반 애플리케이션 개발 경험", "비동기 처리에 대한 이해"],
+  "preferred_qualifications": ["LangGraph 사용 경험"],
+  "location": "서울",
+  "job_type": "정규직"
+}
+```
+
+### Docker 배포
+
+Docker 이미지 빌드, ARM64 빌드, 라즈베리 파이 배포는 [배포 안내](docs/deployment.md)를 참고하세요.
 
 ## API
 
-### 사용자 생성 또는 로그인
+`/signup`, `/login`, `/health`를 제외한 모든 API는 `Authorization: Bearer <access_token>` 헤더가 필요합니다.
 
-```http
-POST /login
-Content-Type: application/json
+| Method | Path | 설명 |
+| --- | --- | --- |
+| POST | `/signup` | 회원가입 |
+| POST | `/login` | 로그인 (Access Token 발급, Refresh Token 쿠키) |
+| POST | `/auth/refresh` | Refresh Token 회전 |
+| POST | `/auth/logout` | 로그아웃 |
+| GET | `/auth/me` | 현재 사용자 |
+| GET | `/profile/me` | 프로필 조회 |
+| POST | `/profile/add_skills` | 기술 스택 추가 |
+| POST | `/profile/documents` | 이력서 등록 (`Idempotency-Key` 필수, `202`) |
+| PUT | `/profile/documents/{document_id}` | 이력서 수정, 새 버전 인덱싱 (`202`) |
+| DELETE | `/profile/documents/{document_id}` | 이력서 삭제, 벡터 정리 (`202`) |
+| POST | `/profile/documents/search` | 여러 쿼리로 이력서 검색 |
+| GET | `/jobs/{job_id}` | 문서 작업 상태 조회 |
+| POST | `/conversations` | 대화 생성 |
+| GET | `/conversations` | 대화 목록 |
+| GET | `/conversations/{conversation_id}` | 대화 조회 |
+| POST | `/conversations/{conversation_id}/chat` | 채팅 (처리 중이면 `409`) |
+| GET | `/postings/me` | 추천 공고 조회 |
 
-{
-  "user_id": "bkk"
-}
-```
-
-같은 `user_id`로 다시 요청하면 기존 사용자의 UUID를 반환합니다.
-
-### 프로필 조회
-
-```http
-GET /profile/{user_uuid}
-```
-
-### 프로필 기술 추가
-
-```http
-POST /profile/add_skills
-Content-Type: application/json
-
-{
-  "user_uuid": "ade095d1-1b9f-4e96-80d8-2f05440a7c10",
-  "skill": "FastAPI"
-}
-```
-
-MongoDB의 `$addToSet`을 사용하므로 동일한 기술은 중복 저장되지 않습니다.
-
-### 이력서 등록
+### 예시: 이력서 등록
 
 ```http
 POST /profile/documents
+Authorization: Bearer <access_token>
+Idempotency-Key: resume-request-001
 Content-Type: application/json
 
 {
-  "user_uuid": "ade095d1-1b9f-4e96-80d8-2f05440a7c10",
   "title": "백엔드 개발자 이력서",
   "content": "Python과 FastAPI를 사용해 비동기 API 서버를 개발했습니다."
 }
 ```
 
-요청 시 원문 저장, 청킹, 임베딩 생성, Pinecone 저장이 순서대로 실행됩니다.
-
-### 여러 요구사항으로 이력서 검색
-
-```http
-POST /profile/documents/search
-Content-Type: application/json
-
-{
-  "user_uuid": "ade095d1-1b9f-4e96-80d8-2f05440a7c10",
-  "queries": [
-    "Python 기반 애플리케이션 개발 경험",
-    "LLM API를 활용한 프로젝트 경험",
-    "비동기 처리에 대한 이해"
-  ],
-  "top_k": 5,
-  "min_score": 0.7,
-  "document_type": "resume"
-}
-```
-
-### AI 채팅
-
-```http
-POST /chat
-Content-Type: application/json
-
-{
-  "user_uuid": "ade095d1-1b9f-4e96-80d8-2f05440a7c10",
-  "message": "서울 Python 백엔드 공고 찾아줘"
-}
-```
-
-적합도 분석 요청 예시:
-
 ```json
-{
-  "user_uuid": "ade095d1-1b9f-4e96-80d8-2f05440a7c10",
-  "message": "테크웨이브 백엔드 개발자 공고에 지원할 만할까?"
-}
+{ "document_id": "...", "job_id": "...", "status": "pending" }
 ```
 
-### 추천 공고 조회
+같은 키와 같은 내용으로 다시 요청하면 같은 `document_id`, `job_id`가 반환되고, 같은 키에 다른 내용을 보내면 `409 Conflict`가 반환됩니다.
+
+### 예시: 채팅
 
 ```http
-GET /postings/{user_uuid}
+POST /conversations/{conversation_id}/chat
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{ "message": "테크웨이브 백엔드 개발자 공고에 지원할 만할까?" }
 ```
 
-## 설계 포인트
+## 테스트
 
-### 의도 분류와 조건 추출 통합
+k6로 멱등성, 대화 동시성, 병렬 처리, 워커 복구를 검증합니다. 실행 방법과 MongoDB 확인 쿼리는 [tests/load/README.md](tests/load/README.md)에 있습니다.
 
-별도의 LLM 호출로 검색 조건을 다시 추출하지 않고, 최초 라우팅 단계에서 `intent`, `company_name`, `job_title`, `keyword`, `location`, `job_type`을 구조화된 출력으로 함께 생성합니다. 이를 통해 워크플로를 단순화하고 LLM 호출 횟수를 줄였습니다.
+| 스크립트 | 검증 내용 |
+| --- | --- |
+| `document_idempotency.js` | 같은 키 동시 등록, 워커 복구용 작업 생성 |
+| `conversation-concurrency.js` | 같은 대화 동시 요청 시 1건만 처리 |
+| `conversation-parallel.js` | 서로 다른 대화의 병렬 처리 |
+| `health.js` | 기본 부하 |
 
-### 사용자별 벡터 데이터 분리
+`409`가 의도한 결과인 테스트는 k6 기본 실패율 대신 `200`/`409` 커스텀 카운터와 MongoDB 결과로 판정합니다.
 
-Pinecone namespace를 사용자 UUID 기준으로 구성했습니다. 검색할 때 namespace만 지정하면 해당 사용자가 등록한 모든 이력서 청크를 대상으로 검색할 수 있습니다.
+## 한계와 다음 단계
 
-### 벡터 검색과 최종 판단 분리
+| 한계 | 개선 방향 |
+| --- | --- |
+| 문서 저장과 작업 생성 사이에 프로세스가 죽으면 작업 없는 문서가 남을 수 있음 | MongoDB 트랜잭션 또는 Outbox 패턴 |
+| 대화 락 TTL이 120초로 고정되어, 실행이 더 길어지면 중복 실행 가능 | 실행 중 TTL 연장(watchdog), fencing token |
+| lease 60초를 넘는 정상 작업도 다른 워커가 재선점할 수 있음 | 처리 중 lease 갱신(heartbeat) |
+| 임베딩 호출 직후 장애 시 외부 API 호출이 중복될 수 있음 | exactly-once는 불가하다는 전제로 결과 저장 멱등성 유지 |
+| Worker가 2초 주기로 폴링 | MongoDB Change Streams 또는 Redis 큐 기반 알림 |
+| 공고 검색이 직무 키워드 중심이라 동의어·복합 조건 처리가 제한적 | 검색 조건과 동의어 처리 개선 |
+| 그래프 진행 상태를 실시간으로 전달하지 않음 | SSE 스트리밍 |
 
-유사도 점수만으로 자격요건 충족 여부를 확정하지 않습니다. 벡터 검색으로 관련 근거 후보를 넓게 가져오고, LLM이 실제 문장을 재검토해 최종 상태를 결정하도록 구성했습니다.
+## 상세 문서
 
-### 구조화된 LLM 출력
-
-Pydantic 모델을 사용해 의도 분류와 적합도 분석 결과의 형태를 제한합니다. 문자열 파싱보다 안정적으로 다음 노드에 데이터를 전달할 수 있습니다.
-
-## 현재 한계
-
-- 회사명 검색 결과가 여러 개인 경우 가장 우선순위가 높은 공고 한 건을 분석합니다.
-- 채용 공고 검색은 현재 직무 키워드 중심이며 복합 조건과 동의어 처리가 제한적입니다.
-- 이력서 등록 과정이 동기적으로 실행되어 큰 문서에서는 응답 시간이 길어질 수 있습니다.
-- 벡터 유사도 임계값은 실제 데이터 기반 튜닝이 더 필요합니다.
-- 인증과 권한 검증은 데모 범위에서 제외했습니다.
-- 이력서 수정 및 삭제 시 기존 Pinecone 벡터를 갱신하는 기능은 아직 없습니다.
-- 그래프 실행 상태를 실시간으로 전달하는 SSE 스트리밍은 아직 적용하지 않았습니다.
-
-## 개선 계획
-
-- 공고 검색 조건과 동의어 처리 개선
-- 여러 공고를 선택하거나 비교하는 흐름 추가
-- 이력서 인덱싱을 백그라운드 작업으로 분리
-- 이력서 수정·삭제 및 벡터 버전 관리
-- 적합도 평가용 테스트 데이터셋과 평가 지표 구축
-- LangGraph 노드 진행 상태 SSE 스트리밍
-- 인증 및 사용자별 리소스 접근 제어
-- 테스트 코드와 예외 처리 보강
-
-## 프로젝트에서 배운 점
-
-- LangGraph의 상태와 조건부 엣지를 이용해 LLM 호출과 일반 애플리케이션 로직을 하나의 흐름으로 구성하는 방법
-- Pydantic 구조화 출력을 이용해 노드 사이의 데이터 계약을 명확하게 만드는 방법
-- MongoDB 원문 저장소와 Pinecone 벡터 저장소의 역할을 분리하는 방법
-- 벡터 유사도만으로 결론을 내리지 않고 검색과 판단 단계를 분리하는 RAG 설계
-- FastAPI lifespan을 이용해 MongoDB 연결 풀의 시작과 종료를 관리하는 방법
+- [인증](docs/authentication.md)
+- [대화와 동시성 제어](docs/conversations.md)
+- [문서 등록 멱등성](docs/idempotency.md)
+- [비동기 문서 처리](docs/document-processing.md)
+- [문서 버전 관리와 인덱스 정합성](docs/document-versioning.md)
+- [배포](docs/deployment.md)
