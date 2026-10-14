@@ -36,7 +36,7 @@ jobs:
           ssh -i ~/.ssh/pi_deploy_key -p "${{ secrets.PI_PORT || 22 }}" "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" <<'EOF'
             set -e
             cd "${{ secrets.PI_APP_DIR }}"
-            docker compose pull api
+            docker compose pull api worker
             docker compose up -d --remove-orphans
             docker compose ps
           EOF
